@@ -1,0 +1,41 @@
+@startuml Outbound Messages
+start
+
+floating note
+    URL encoded parameters are validated and sent to Twilio
+    User sends text using browser address bar
+end note
+
+:User GETs https://sms.wbor.org/send;
+:Validate the `password` provided;
+
+if (Is `password` valid?) then (yes)
+    if (Is `recipient_number` valid?) then (yes)
+        if (Is a message body present?) then (yes)
+            if (Is the message within Twilio's 1600 char limit?) then (yes)
+                :Attempt to send message;
+                if (Was the message sent successfully?) then (yes)
+                    :Log that a message was sent (info);
+                else (no)
+                    :Respond with a 500 status (Internal Server Error);
+                    stop
+                endif
+            else (no)
+                ->400_Response;
+                stop
+            endif
+        else (no)
+            ->400_Response;
+            stop
+        endif
+    else (no)
+        ->400_Response;
+        stop
+    endif
+else (no)
+    :Return a 403 HTTP response and log the attempt
+    Includes IP;
+    stop
+endif
+stop
+@enduml

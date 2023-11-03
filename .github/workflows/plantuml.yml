@@ -1,0 +1,75 @@
+name: Generate PlantUML Diagrams
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'diagrams/*.puml' # Only trigger on changes to .puml files
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'diagrams/*.puml' # Only trigger on changes to .puml files
+
+jobs:
+  generate-diagrams:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '11'
+
+    - name: Install PlantUML and Graphviz
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y plantuml graphviz
+
+    - name: List PUML files (Debugging Step)
+      run: |
+        find diagrams/ -name '*.puml'
+
+    - name: Confirm .puml Files Exist (Debugging Step)
+      run: |
+        if ! compgen -G "diagrams/*.puml" > /dev/null; then
+          echo "No .puml files found to generate diagrams."
+          exit 1
+        fi
+
+    - name: Generate Diagrams
+      run: |
+        plantuml -tpng diagrams/*.puml -o diagrams/
+
+    - name: Check Generated PNGs (Debugging Step)
+      run: |
+        ls -l diagrams/*.png || echo "No .png files generated."
+
+    - name: Commit and Push Diagrams
+      run: |
+        if ls diagrams/*.png 1> /dev/null 2>&1; then
+          # If PNG files already exist, check for differences
+          if git diff --exit-code diagrams/*.png; then
+            echo "No changes in diagrams. Skipping commit."
+          else
+            git config --global user.name 'GitHub Action'
+            git config --global user.email 'action@github.com'
+            git add diagrams/*.png
+            git commit -m "Add generated PlantUML diagrams"
+            git push
+          fi
+        else
+          # If no PNG files exist, commit the newly generated ones
+          git config --global user.name 'GitHub Action'
+          git config --global user.email 'action@github.com'
+          git add diagrams/*.png
+          git commit -m "Initial commit of generated PlantUML diagrams"
+          git push
+        fi

@@ -1,0 +1,22 @@
+@startuml Inbound Messages
+start
+
+floating note
+    Flask receives incoming SMS from Twilio,
+    validates, and pushes to RabbitMQ for processing.
+end note
+
+:Twilio POSTs SMS data to https://sms.wbor.org/sms;
+:Validate the webhook with Twilio's SDK (via decorator);
+
+if (Is POST valid?) then (yes)
+    :Log that a message was received (info);
+    :Publish SMS data to RabbitMQ queue;
+
+    :Respond to Twilio with a 200 status (OK);
+else (no)
+    :SDK Validator returns a 403 HTTP response;
+    stop
+endif
+stop
+@enduml
