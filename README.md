@@ -8,7 +8,7 @@ Basic Flask + Gunicorn server that deals with Twilio related operations:
 ## Activity Diagrams
 
 ### Incoming Messages
-![Incoming messages activity diagram](/diagrams/diagrams/Inbound%20Messages.png)
+![Incoming messages activity diagram](/diagrams/png/Inbound%20Messages.png)
 
 ### Outgoing Messages
-![Incoming messages activity diagram](/diagrams/diagrams/Outbound%20Messages.png)
+![Incoming messages activity diagram](/diagrams/png/Outbound%20Messages.png)
