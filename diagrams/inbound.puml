@@ -16,7 +16,6 @@ if (Is POST valid?) then (yes)
     :Respond to Twilio with a 200 status (OK);
 else (no)
     :SDK Validator returns a 403 HTTP response;
-    :SDK Validator returns a 403 HTTP response;
     stop
 endif
 stop
