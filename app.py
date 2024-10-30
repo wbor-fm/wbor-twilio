@@ -73,6 +73,8 @@ twilio_client.http_client.logger.setLevel(logging.INFO)
 def publish_to_queue(queue_name, message):
     """
     Publishes a message to a RabbitMQ queue.
+    
+    Routing key is set as the queue name. Uses default exchange.
 
     Parameters:
     - queue_name (str): The name of the RabbitMQ queue to publish to.
@@ -100,7 +102,7 @@ def publish_to_queue(queue_name, message):
                 delivery_mode=2,  # Persistent message - write to disk for safety
             ),
         )
-        logger.info("Published SMS message to queue: %s", message)
+        logger.info("Published SMS message to queue: %s. Message: %s", queue_name, message)
         connection.close()
     except pika.exceptions.AMQPConnectionError as conn_error:
         logger.error(
