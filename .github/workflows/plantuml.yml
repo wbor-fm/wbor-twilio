@@ -46,22 +46,22 @@ jobs:
 
     - name: Generate Diagrams
       run: |
-        plantuml -tpng diagrams/*.puml -o diagrams/
+        plantuml -tpng diagrams/*.puml -o png/
 
     - name: Check Generated PNGs (Debugging Step)
       run: |
-        ls -l diagrams/*.png || echo "No .png files generated."
+        ls -l diagrams/png/*.png || echo "No .png files generated."
 
     - name: Commit and Push Diagrams
       run: |
-        if ls diagrams/*.png 1> /dev/null 2>&1; then
+        if ls diagrams/png/*.png 1> /dev/null 2>&1; then
           # If PNG files already exist, check for differences
-          if git diff --exit-code diagrams/*.png; then
+          if git diff --exit-code diagrams/png/*.png; then
             echo "No changes in diagrams. Skipping commit."
           else
             git config --global user.name 'GitHub Action'
             git config --global user.email 'action@github.com'
-            git add diagrams/*.png
+            git add diagrams/png/*.png
             git commit -m "Add generated PlantUML diagrams"
             git push
           fi
@@ -69,7 +69,7 @@ jobs:
           # If no PNG files exist, commit the newly generated ones
           git config --global user.name 'GitHub Action'
           git config --global user.email 'action@github.com'
-          git add diagrams/*.png
+          git add diagrams/png/*.png
           git commit -m "Initial commit of generated PlantUML diagrams"
           git push
         fi
