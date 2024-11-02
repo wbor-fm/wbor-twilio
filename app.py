@@ -35,6 +35,8 @@ RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
 GROUPME_QUEUE = os.getenv("GROUPME_QUEUE", "groupme")
 POSTGRES_QUEUE = os.getenv("POSTGRES_QUEUE", "postgres")
 
+TWILIO_CHARACTER_LIMIT = 1600  # Twilio SMS character limit
+
 # Logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -194,7 +196,7 @@ def send_sms():
     if not message:
         logger.warning("Message body content missing")
         abort(400, "Message body text is required")
-    if len(message) > 1600:  # Twilio message size limit
+    if len(message) > TWILIO_CHARACTER_LIMIT:
         logger.warning("Message too long: %d characters", len(message))
         abort(400, "Message exceeds character limit")
     try:
