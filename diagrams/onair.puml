@@ -1,0 +1,35 @@
+@startuml What's playing?
+actor Listener
+participant "wbor-twilio" as Twilio
+participant "LLM Classifier" as LLM
+participant "Spinitron API" as Spinitron
+participant "Logging Service" as Logger
+
+Listener -> Twilio: Send text message
+Twilio -> LLM: Forward received message
+
+group Message Classification
+    LLM -> LLM: Classify message intent
+    LLM -> Logger: Log classification
+    alt Classification Successful
+        LLM -> Twilio: Return intent
+    else Classification Failed
+        LLM -> Logger: Log classification failure
+    end
+end
+
+alt Intent: "Asking to know the current song"
+    Twilio -> Spinitron: Query current song
+    group Spinitron
+        alt Query Successful
+            Spinitron -> Twilio: Return song metadata
+            Twilio -> Listener: Send song and artist info
+            Logger -> Logger: Log response sent
+        else Query Timeout or Failure
+            Spinitron -> Logger: Log query failure
+        end
+    end
+else Intent: Other
+    Twilio -> Logger: Log intent classified as 'Other'
+end
+@enduml
