@@ -55,21 +55,20 @@ jobs:
     - name: Commit and Push Diagrams
       run: |
         if ls diagrams/png/*.png 1> /dev/null 2>&1; then
-          # If PNG files already exist, check for differences
-          if git diff --exit-code diagrams/png/*.png; then
+          # Configure git user
+          git config --global user.name 'GitHub Action'
+          git config --global user.email 'action@github.com'
+          
+          # Stage all PNG files (new and modified)
+          git add diagrams/png/*.png
+          
+          # Check if there are any staged changes
+          if git diff --cached --exit-code; then
             echo "No changes in diagrams. Skipping commit."
           else
-            git config --global user.name 'GitHub Action'
-            git config --global user.email 'action@github.com'
-            git add diagrams/png/*.png
-            git commit -m "Add generated PlantUML diagrams"
+            git commit -m "Add or update generated PlantUML diagrams"
             git push
           fi
         else
-          # If no PNG files exist, commit the newly generated ones
-          git config --global user.name 'GitHub Action'
-          git config --global user.email 'action@github.com'
-          git add diagrams/png/*.png
-          git commit -m "Initial commit of generated PlantUML diagrams"
-          git push
+          echo "No .png files generated."
         fi
