@@ -1,0 +1,20 @@
+@startuml Call Recording
+participant Twilio as "Twilio"
+participant WebServer as "Web Server"
+participant Disk as "Disk"
+participant Postgres as "Postgres"
+
+Twilio -> WebServer: POST /voice with audio file URL
+WebServer -> WebServer: Validate POST
+alt Validation Passes
+    WebServer -> Twilio: 200 OK (Acknowledgment)
+    WebServer -> WebServer: Extract metadata from POST
+    WebServer -> WebServer: Download audio file from URL
+    alt Download Successful
+        WebServer -> Disk: Save audio file to disk
+        Disk -> WebServer: Return file path
+        WebServer -> Postgres: INSERT call log (call ID, timestamp, file path, etc.)
+else Validation Fails
+    WebServer -> Twilio: 400 Bad Request
+end
+@enduml
