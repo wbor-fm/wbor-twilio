@@ -1,4 +1,4 @@
-@startuml What's playing?
+@startuml What is playing on air
 actor Listener
 participant "wbor-twilio" as Twilio
 participant "LLM Classifier" as LLM
