@@ -72,15 +72,15 @@ twilio_client = Client(
 twilio_client.http_client.logger.setLevel(logging.INFO)
 
 
-def publish_to_queue(queue_name, message):
+def publish_to_queue(queue_name, sms_data):
     """
     Publishes a message to a RabbitMQ queue.
-    
+
     Routing key is set as the queue name. Uses default exchange.
 
     Parameters:
     - queue_name (str): The name of the RabbitMQ queue to publish to.
-    - message (dict): The message content, which will be converted to JSON format.
+    - sms_data (dict): The message content, which will be converted to JSON format.
     """
     try:
         credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
@@ -98,13 +98,15 @@ def publish_to_queue(queue_name, message):
             exchange="",
             routing_key=queue_name,  # Routing key determines which queue gets the message
             body=json.dumps(
-                message
+                sms_data
             ).encode(),  # Encodes msg as bytes. RabbitMQ requires byte data
             properties=pika.BasicProperties(
                 delivery_mode=2,  # Persistent message - write to disk for safety
             ),
         )
-        logger.info("Published SMS message to queue: %s. Message: %s", queue_name, message)
+        logger.info(
+            "Published SMS message to queue: %s. Message: %s", queue_name, sms_data
+        )
         connection.close()
     except pika.exceptions.AMQPConnectionError as conn_error:
         logger.error(
@@ -115,7 +117,7 @@ def publish_to_queue(queue_name, message):
             "Channel error when publishing to queue %s: %s", queue_name, chan_error
         )
     except json.JSONDecodeError as json_error:
-        logger.error("JSON encoding error for message %s: %s", message, json_error)
+        logger.error("JSON encoding error for message %s: %s", sms_data, json_error)
 
 
 def validate_twilio_request(f):
@@ -153,6 +155,34 @@ def validate_twilio_request(f):
     return decorated_function
 
 
+def fetch_name(sms_data):
+    """
+    Attempt to fetch the name of the sender of the SMS message.
+
+    Parameters:
+    - sms_data (dict): The SMS message data containing the sender's phone number.
+
+    Returns:
+    - str: The name of the sender if available, otherwise 'Unknown'.
+    """
+    phone_number = sms_data.get("From")
+    if not phone_number:
+        logger.warning("No 'From' field in SMS data: %s", sms_data)
+        return "Unknown"
+
+    try:
+        phone_info = twilio_client.lookups.v2.phone_numbers(phone_number).fetch(
+            type="caller-name"
+        )
+        logger.debug("Fetched caller name: %s", phone_info.caller_name)
+        return phone_info.caller_name.get("caller_name", "Unknown")
+    except TwilioRestException as e:
+        logger.error(
+            "Failed to fetch caller name for number %s: %s", phone_number, str(e)
+        )
+        return "Unknown"
+
+
 @app.route("/sms", methods=["GET", "POST"])
 @validate_twilio_request
 def receive_sms():
@@ -166,6 +196,10 @@ def receive_sms():
     logger.debug("Received SMS message with data: %s", sms_data)
     resp = MessagingResponse()  # Required by Twilio
 
+    logger.debug("Attempting to fetch caller name for SMS message")
+    sender_name = fetch_name(sms_data)
+    sms_data["SenderName"] = sender_name
+
     # Publish to queues in separate threads to avoid blocking
     Thread(target=publish_to_queue, args=(POSTGRES_QUEUE, sms_data)).start()
     Thread(target=publish_to_queue, args=(GROUPME_QUEUE, sms_data)).start()
@@ -177,7 +211,7 @@ def receive_sms():
 def send_sms():
     """
     Send an SMS message using the Twilio API from a browser address bar. Requires a password.
-    
+
     Expects recipient_number to be in E.164 format, e.g. +12077253250.
     Encoding the `+` as %2B also works.
     """
@@ -187,10 +221,10 @@ def send_sms():
         logger.warning("Unauthorized access attempt from IP: %s", request.remote_addr)
         abort(403, "Unauthorized access")
 
-    recipient_number = request.args.get('recipient_number', '').replace(' ', '+')
+    recipient_number = request.args.get("recipient_number", "").replace(" ", "+")
     message = request.args.get("message")
 
-    if not recipient_number or not re.fullmatch(r'^\+?\d{10,15}$', recipient_number):
+    if not recipient_number or not re.fullmatch(r"^\+?\d{10,15}$", recipient_number):
         logger.warning("Invalid recipient number format: %s", recipient_number)
         abort(400, "Invalid recipient number format (must use the E.164 standard)")
     if not message:
