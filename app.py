@@ -172,10 +172,8 @@ def fetch_name(sms_data):
         return "Unknown"
 
     try:
-        phone_info = twilio_client.lookups.v2.phone_numbers(phone_number).fetch(
-            type="caller-name"
-        )
-        logger.debug("Fetched caller name: %s", phone_info.caller_name)
+        phone_info = twilio_client.lookups.v2.phone_numbers(phone_number).fetch()
+        logger.debug("Fetched caller name: %s", phone_info.get("caller_name", "Unknown"))
         return phone_info.caller_name.get("caller_name", "Unknown")
     except TwilioRestException as e:
         logger.error(
