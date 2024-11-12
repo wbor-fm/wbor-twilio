@@ -21,6 +21,7 @@ from twilio.request_validator import RequestValidator
 from twilio.base.exceptions import TwilioRestException
 from twilio.twiml.messaging_response import MessagingResponse
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 # Load environment variables from .env file
 load_dotenv()
@@ -197,7 +198,21 @@ def receive_sms():
     resp = MessagingResponse()  # Required by Twilio
 
     logger.debug("Attempting to fetch caller name for SMS message")
-    sender_name = fetch_name(sms_data)
+    
+    def fetch_name_with_timeout(sms_data, timeout=10):
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(fetch_name, sms_data)
+            try:
+                return future.result(timeout=timeout)
+            except TimeoutError:
+                logger.error("Timeout occurred while fetching sender name")
+                return "Unknown"
+
+    try:
+        sender_name = fetch_name_with_timeout(sms_data)
+    except Exception as e:
+        logger.error("Error fetching sender name: %s", str(e))
+        sender_name = "Unknown"
     sms_data["SenderName"] = sender_name
 
     # Publish to queues in separate threads to avoid blocking
