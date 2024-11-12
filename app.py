@@ -67,9 +67,7 @@ logging.getLogger("werkzeug").setLevel(logging.INFO)
 app = Flask(__name__)
 
 # Twilio client initialization
-twilio_client = Client(
-    TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, region="us1", edge="ashburn"
-)
+twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 twilio_client.http_client.logger.setLevel(logging.INFO)
 
 
@@ -175,7 +173,9 @@ def fetch_name(sms_data):
         phone_info = twilio_client.lookups.v2.phone_numbers(phone_number).fetch(
             fields="caller_name"
         )
-        logger.debug("Fetched caller name: %s", phone_info.get("caller_name", "Unknown"))
+        logger.debug(
+            "Fetched caller name: %s", phone_info.get("caller_name", "Unknown")
+        )
         return phone_info.caller_name.get("caller_name", "Unknown")
     except TwilioRestException as e:
         logger.error(
@@ -198,7 +198,7 @@ def receive_sms():
     resp = MessagingResponse()  # Required by Twilio
 
     logger.debug("Attempting to fetch caller name for SMS message")
-    
+
     def fetch_name_with_timeout(sms_data, timeout=10):
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(fetch_name, sms_data)
