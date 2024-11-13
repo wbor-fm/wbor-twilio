@@ -176,7 +176,7 @@ def fetch_name(sms_data):
 
         caller_name = phone_info.caller_name or "Unknown"
         logger.debug("Fetched caller name: %s", caller_name)
-        return caller_name
+        return caller_name.get("caller_name", "Unknown")
     except TwilioRestException as e:
         logger.error(
             "Failed to fetch caller name for number %s: %s", phone_number, str(e)
