@@ -8,7 +8,7 @@ import os
 import logging
 import json
 import re
-from threading import Event, Thread
+from threading import Thread
 from functools import wraps
 from datetime import datetime, timezone
 from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
@@ -18,6 +18,7 @@ import pika
 import pika.exceptions
 import pytz
 from flask import Flask, abort, request
+from redis import Redis
 from twilio.rest import Client
 from twilio.request_validator import RequestValidator
 from twilio.base.exceptions import TwilioRestException
@@ -36,6 +37,10 @@ RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
 RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
 GROUPME_QUEUE = os.getenv("GROUPME_QUEUE", "groupme")
 POSTGRES_QUEUE = os.getenv("POSTGRES_QUEUE", "postgres")
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+REDIS_ACK_EXPIRATION = int(os.getenv("REDIS_ACK_EXPIRATION", "60"))  # in seconds
 
 TWILIO_CHARACTER_LIMIT = 1600  # Twilio SMS character limit
 
@@ -65,13 +70,31 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 logging.getLogger("werkzeug").setLevel(logging.INFO)
 
+redis_client = Redis(
+    host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True
+)
+
 app = Flask(__name__)
 
-# Twilio client initialization
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 twilio_client.http_client.logger.setLevel(logging.INFO)
 
-ack_events = {}
+
+def set_ack_event(message_id):
+    """Set an acknowledgment event in Redis with an expiration time."""
+    redis_client.set(message_id, "pending", ex=REDIS_ACK_EXPIRATION)
+    logger.debug("Set ack event for message_id: %s", message_id)
+
+
+def get_ack_event(message_id):
+    """Get the acknowledgment status for a message ID."""
+    return redis_client.get(message_id)
+
+
+def delete_ack_event(message_id):
+    """Delete an acknowledgment event from Redis."""
+    redis_client.delete(message_id)
+    logger.debug("Deleted ack event for message_id: %s", message_id)
 
 
 def publish_to_queue(queue_name, sms_data):
@@ -200,12 +223,13 @@ def acknowledge():
         return "Invalid acknowledgment", 400
 
     message_id = ack_data["wbor_message_id"]
-    if message_id in ack_events:
-        logger.info("Acknowledgment received for message ID: %s", message_id)
-        ack_events[message_id].set()  # Signal the task is complete
+
+    if get_ack_event(message_id):
+        logger.info("Acknowledgment received for message_id: %s", message_id)
+        delete_ack_event(message_id)
         return "Acknowledgment received", 200
-    logger.warning("Acknowledgment for unknown message ID: %s", message_id)
-    return "Unknown message ID", 404
+    logger.warning("Acknowledgment for unknown message_id: %s", message_id)
+    return "Unknown message_id", 404
 
 
 @app.route("/sms", methods=["GET", "POST"])
@@ -225,9 +249,7 @@ def receive_sms():
     # Generate a unique message ID and add it to the SMS data
     message_id = str(uuid4())
     sms_data["wbor_message_id"] = message_id
-
-    # Add an Event for this message ID
-    ack_events[message_id] = Event()
+    set_ack_event(message_id)
 
     logger.debug("Attempting to fetch caller name for SMS message")
 
@@ -252,21 +274,13 @@ def receive_sms():
     Thread(target=publish_to_queue, args=(GROUPME_QUEUE, sms_data)).start()
 
     # Wait for acknowledgment from the GroupMe consumer
-    ack_received = ack_events[message_id].wait(timeout=8)
-
-    # Cleanup the Event after acknowledgment or timeout
-    ack_events.pop(message_id, None)
-
-    if ack_received:
-        logger.info(
-            "Acknowledgment received by wbor-groupme for message ID: %s", message_id
-        )
-        return str(resp)  # Respond to Twilio after successful acknowledgment
-    else:
-        logger.error(
-            "Timeout waiting for acknowledgment for message ID: %s", message_id
-        )
-        abort(500, "Failed to process message in downstream consumer")
+    start_time = datetime.now()
+    while (datetime.now() - start_time).seconds < REDIS_ACK_EXPIRATION:
+        if not get_ack_event(message_id):  # Acknowledgment received
+            logger.info("Acknowledgment received for message_id: %s", message_id)
+            return str(resp)
+    logger.error("Timeout waiting for acknowledgment for message_id: %s", message_id)
+    return "Failed to process message", 500
 
 
 @app.route("/send", methods=["GET"])
