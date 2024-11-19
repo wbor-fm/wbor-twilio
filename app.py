@@ -248,7 +248,7 @@ def receive_sms():
     sms_data["SenderName"] = sender_name
 
     # Publish to queues in separate threads to avoid blocking
-    Thread(target=publish_to_queue, args=(POSTGRES_QUEUE, sms_data)).start()
+    # Thread(target=publish_to_queue, args=(POSTGRES_QUEUE, sms_data)).start()
     Thread(target=publish_to_queue, args=(GROUPME_QUEUE, sms_data)).start()
 
     # Wait for acknowledgment from the GroupMe consumer
@@ -307,6 +307,35 @@ def send_sms():
     except TwilioRestException as e:
         logger.error("Failed to send message: %s", str(e))
         abort(500, f"Failed to send message: {e}")
+
+
+@app.route("/voice-intelligence", methods=["POST"])
+def log_webhook():
+    """
+    Endpoint for receiving Voice Intelligence webhook events.
+
+    Expects a JSON payload with a 'transcript_sid' field.
+
+    Returns:
+    - str: A 202 Accepted response.
+    """
+    data = request.get_json()
+    logger.debug("Received Voice Intelligence webhook fire with data: %s", data)
+    logger.debug("Transcript SID: %s", data.transcript_sid)
+    return "Accepted", 202
+
+
+@app.route("/call-events", methods=["POST"])
+def log_call_event():
+    """
+    Endpoint for receiving Call Event webhook events.
+
+    Returns:
+    - str: A 202 Accepted response.
+    """
+    data = request.form.to_dict()
+    logger.debug("Received Call Event webhook fire with data: %s", data)
+    return "Accepted", 202
 
 
 @app.route("/")
