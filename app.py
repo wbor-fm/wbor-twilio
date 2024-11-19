@@ -8,10 +8,12 @@ import os
 import logging
 import json
 import re
-from threading import Thread
+from threading import Event, Thread
 from functools import wraps
 from datetime import datetime, timezone
 from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from uuid import uuid4
 import pika
 import pika.exceptions
 import pytz
@@ -21,7 +23,6 @@ from twilio.request_validator import RequestValidator
 from twilio.base.exceptions import TwilioRestException
 from twilio.twiml.messaging_response import MessagingResponse
 from dotenv import load_dotenv
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 # Load environment variables from .env file
 load_dotenv()
@@ -69,6 +70,8 @@ app = Flask(__name__)
 # Twilio client initialization
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 twilio_client.http_client.logger.setLevel(logging.INFO)
+
+ack_events = {}
 
 
 def publish_to_queue(queue_name, sms_data):
@@ -184,6 +187,27 @@ def fetch_name(sms_data):
         return "Unknown"
 
 
+@app.route("/acknowledge", methods=["POST"])
+def acknowledge():
+    """
+    Endpoint for receiving acknowledgment from the GROUPME_QUEUE consumer.
+
+    Expects a JSON payload with a 'wbor_message_id' field indicating the message processed.
+    """
+    ack_data = request.json
+    if not ack_data or "wbor_message_id" not in ack_data:
+        logger.error("Invalid acknowledgment data: %s", ack_data)
+        return "Invalid acknowledgment", 400
+
+    message_id = ack_data["wbor_message_id"]
+    if message_id in ack_events:
+        logger.info("Acknowledgment received for message ID: %s", message_id)
+        ack_events[message_id].set()  # Signal the task is complete
+        return "Acknowledgment received", 200
+    logger.warning("Acknowledgment for unknown message ID: %s", message_id)
+    return "Unknown message ID", 404
+
+
 @app.route("/sms", methods=["GET", "POST"])
 @validate_twilio_request
 def receive_sms():
@@ -192,25 +216,33 @@ def receive_sms():
 
     Returns:
     - str: A TwiML response to acknowledge receipt of the message (required by Twilio).
+        If a response is not sent, Twilio will fall back to the secondary message handler.
     """
     sms_data = request.form.to_dict()
     logger.debug("Received SMS message with data: %s", sms_data)
     resp = MessagingResponse()  # Required by Twilio
 
+    # Generate a unique message ID and add it to the SMS data
+    message_id = str(uuid4())
+    sms_data["wbor_message_id"] = message_id
+
+    # Add an Event for this message ID
+    ack_events[message_id] = Event()
+
     logger.debug("Attempting to fetch caller name for SMS message")
 
-    def fetch_name_with_timeout(sms_data, timeout=10):
+    def fetch_name_with_timeout(sms_data, timeout=3):
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(fetch_name, sms_data)
             try:
                 return future.result(timeout=timeout)
-            except TimeoutError:
+            except FuturesTimeoutError:
                 logger.error("Timeout occurred while fetching sender name")
                 return "Unknown"
 
     try:
         sender_name = fetch_name_with_timeout(sms_data)
-    except Exception as e:
+    except (TwilioRestException, FuturesTimeoutError) as e:
         logger.error("Error fetching sender name: %s", str(e))
         sender_name = "Unknown"
     sms_data["SenderName"] = sender_name
@@ -219,7 +251,22 @@ def receive_sms():
     Thread(target=publish_to_queue, args=(POSTGRES_QUEUE, sms_data)).start()
     Thread(target=publish_to_queue, args=(GROUPME_QUEUE, sms_data)).start()
 
-    return str(resp)
+    # Wait for acknowledgment from the GroupMe consumer
+    ack_received = ack_events[message_id].wait(timeout=8)
+
+    # Cleanup the Event after acknowledgment or timeout
+    ack_events.pop(message_id, None)
+
+    if ack_received:
+        logger.info(
+            "Acknowledgment received by wbor-groupme for message ID: %s", message_id
+        )
+        return str(resp)  # Respond to Twilio after successful acknowledgment
+    else:
+        logger.error(
+            "Timeout waiting for acknowledgment for message ID: %s", message_id
+        )
+        abort(500, "Failed to process message in downstream consumer")
 
 
 @app.route("/send", methods=["GET"])
