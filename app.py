@@ -37,7 +37,7 @@ RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
 RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
 GROUPME_QUEUE = os.getenv("GROUPME_QUEUE", "groupme")
 POSTGRES_QUEUE = os.getenv("POSTGRES_QUEUE", "postgres")
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_HOST = os.getenv("REDIS_HOST", "wbor-redis-server")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 REDIS_ACK_EXPIRATION = int(os.getenv("REDIS_ACK_EXPIRATION", "60"))  # in seconds
@@ -277,7 +277,6 @@ def receive_sms():
     start_time = datetime.now()
     while (datetime.now() - start_time).seconds < REDIS_ACK_EXPIRATION:
         if not get_ack_event(message_id):  # Acknowledgment received
-            logger.info("Acknowledgment received for message_id: %s", message_id)
             return str(resp)
     logger.error("Timeout waiting for acknowledgment for message_id: %s", message_id)
     return "Failed to process message", 500
