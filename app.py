@@ -107,9 +107,7 @@ def get_ack_event(message_id):
     Returns:
     - str: The status of the acknowledgment event (e.g. 'pending', 'acknowledged', None
     """
-    status = redis_client.get(message_id)
-    logger.debug("Ack event status for message_id %s: %s", message_id, status)
-    return status
+    return redis_client.get(message_id)
 
 
 def delete_ack_event(message_id):
