@@ -2,6 +2,12 @@
 Twilio Handler.
 - Publishes incoming messages to a RabbitMQ queue.
 - Endpoint to send messages from our station number (behind password).
+
+TO-DO:
+- Implement a retry mechanism for failed message processing
+- Implement a message queue for outgoing messages?
+- Do something with incoming voice intelligence data
+- Do something with incoming call events
 """
 
 import os
@@ -270,10 +276,11 @@ def receive_sms():
     sms_data["SenderName"] = sender_name
 
     # Publish to queues in separate threads to avoid blocking
-    # Thread(target=publish_to_queue, args=(POSTGRES_QUEUE, sms_data)).start()
+    Thread(target=publish_to_queue, args=(POSTGRES_QUEUE, sms_data)).start()
     Thread(target=publish_to_queue, args=(GROUPME_QUEUE, sms_data)).start()
 
-    # Wait for acknowledgment from the GroupMe consumer
+    # Wait for acknowledgment from the GroupMe consumer so that fallback handler can be
+    # triggered if the message fails to process for any reason
     start_time = datetime.now()
     while (datetime.now() - start_time).seconds < REDIS_ACK_EXPIRATION:
         if not get_ack_event(message_id):  # Acknowledgment received
