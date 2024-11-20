@@ -41,8 +41,6 @@ TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "wbor-rabbitmq")
 RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
 RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
-GROUPME_KEY = os.getenv("GROUPME_KEY", "groupme")
-POSTGRES_KEY = os.getenv("POSTGRES_KEY", "postgres")
 REDIS_HOST = os.getenv("REDIS_HOST", "wbor-redis-server")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
@@ -300,7 +298,7 @@ def receive_sms():
 
     # Publish to queues in separate threads to avoid blocking
     # Thread(target=publish_to_exchange, args=(POSTGRES_KEY, sms_data)).start()
-    Thread(target=publish_to_exchange, args=(GROUPME_KEY, sms_data)).start()
+    Thread(target=publish_to_exchange, args=("source.twilio", sms_data)).start()
 
     logger.debug("Waiting for acknowledgment for message_id: %s", message_id)
     # Wait for acknowledgment from the GroupMe consumer so that fallback handler can be
