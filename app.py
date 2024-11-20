@@ -298,7 +298,7 @@ def receive_sms():
 
     # Publish to queues in separate threads to avoid blocking
     # Thread(target=publish_to_exchange, args=(POSTGRES_KEY, sms_data)).start()
-    Thread(target=publish_to_exchange, args=("source.twilio", sms_data)).start()
+    Thread(target=publish_to_exchange, args=("twilio", sms_data)).start()
 
     logger.debug("Waiting for acknowledgment for message_id: %s", message_id)
     # Wait for acknowledgment from the GroupMe consumer so that fallback handler can be
