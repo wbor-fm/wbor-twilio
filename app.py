@@ -121,9 +121,9 @@ def publish_to_exchange(key, sms_data):
         channel = connection.channel()
 
         channel.exchange_declare(
-            exchange="source_exchange",  
-            exchange_type="topic",       
-            durable=True # Ensures the exchange persists after RabbitMQ restarts
+            exchange="source_exchange",
+            exchange_type="topic",
+            durable=True,  # Ensures the exchange persists after RabbitMQ restarts
         )
 
         # Publish message to exchange
@@ -138,12 +138,16 @@ def publish_to_exchange(key, sms_data):
             ),
         )
         logger.info(
-            "Published SMS message to exchange wiith key: %s. Message: %s", key, sms_data
+            "Published SMS message to exchange with key: %s. Message: %s",
+            key,
+            sms_data,
         )
         connection.close()
     except pika.exceptions.AMQPConnectionError as conn_error:
         logger.error(
-            "Connection error when publishing to exchange with key %s: %s", key, conn_error
+            "Connection error when publishing to exchange with key %s: %s",
+            key,
+            conn_error,
         )
     except pika.exceptions.AMQPChannelError as chan_error:
         logger.error(
@@ -278,7 +282,7 @@ def receive_sms():
     sms_data["SenderName"] = sender_name
 
     # Publish to queues in separate threads to avoid blocking
-    Thread(target=publish_to_exchange, args=(POSTGRES_KEY, sms_data)).start()
+    # Thread(target=publish_to_exchange, args=(POSTGRES_KEY, sms_data)).start()
     Thread(target=publish_to_exchange, args=(GROUPME_KEY, sms_data)).start()
 
     # Wait for acknowledgment from the GroupMe consumer so that fallback handler can be
