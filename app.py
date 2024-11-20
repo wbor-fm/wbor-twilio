@@ -371,5 +371,4 @@ def hello_world():
 
 
 if __name__ == "__main__":
-    logger.info("Twilio now ready.")
     app.run(host="0.0.0.0", port=APP_PORT)
