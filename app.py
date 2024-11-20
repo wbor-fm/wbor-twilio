@@ -48,6 +48,8 @@ REDIS_ACK_EXPIRATION = int(os.getenv("REDIS_ACK_EXPIRATION", "60"))  # in second
 
 TWILIO_CHARACTER_LIMIT = 1600  # Twilio SMS character limit
 
+SOURCE = "twilio"  # Define source name for RabbitMQ exchange purposes
+
 # Logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -123,8 +125,6 @@ def publish_to_exchange(key, sms_data):
     """
     Publishes a message to a RabbitMQ queue.
 
-    Routing key is set as the queue name. Uses default exchange.
-
     Parameters:
     - key (str): The name of the message key.
     - sms_data (dict): The message content, which will be converted to JSON format.
@@ -136,6 +136,7 @@ def publish_to_exchange(key, sms_data):
         )
         channel = connection.channel()
 
+        # Assert the exchange exists
         channel.exchange_declare(
             exchange="source_exchange",
             exchange_type="topic",
@@ -280,6 +281,7 @@ def receive_sms():
     set_ack_event(message_id)
 
     logger.debug("Attempting to fetch caller name for SMS message")
+
     def fetch_name_with_timeout(sms_data, timeout=3):
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(fetch_name, sms_data)
@@ -297,8 +299,7 @@ def receive_sms():
     sms_data["SenderName"] = sender_name
 
     # Publish to queues in separate threads to avoid blocking
-    # Thread(target=publish_to_exchange, args=(POSTGRES_KEY, sms_data)).start()
-    Thread(target=publish_to_exchange, args=("twilio", sms_data)).start()
+    Thread(target=publish_to_exchange, args=(SOURCE, sms_data)).start()
 
     logger.debug("Waiting for acknowledgment for message_id: %s", message_id)
     # Wait for acknowledgment from the GroupMe consumer so that fallback handler can be
@@ -306,7 +307,6 @@ def receive_sms():
     start_time = datetime.now()
     while (datetime.now() - start_time).seconds < REDIS_ACK_EXPIRATION:
         if not get_ack_event(message_id):  # Acknowledgment received
-            logger.info("Acknowledgment received for message_id: %s", message_id)
             return str(resp)
     logger.error("Timeout waiting for acknowledgment for message_id: %s", message_id)
     delete_ack_event(message_id)
