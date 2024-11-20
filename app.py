@@ -130,11 +130,16 @@ def publish_to_exchange(key, sms_data):
     - sms_data (dict): The message content, which will be converted to JSON format.
     """
     try:
+        logger.debug("Attempting to connect to RabbitMQ...")
         credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
-        connection = pika.BlockingConnection(
-            pika.ConnectionParameters(host=RABBITMQ_HOST, credentials=credentials)
+        parameters = pika.ConnectionParameters(
+            host=RABBITMQ_HOST,
+            credentials=credentials,
+            client_properties={"connection_name": "TwilioConsumerConnection"},
         )
+        connection = pika.BlockingConnection(parameters)
         channel = connection.channel()
+        logger.debug("Connected!")
 
         # Assert the exchange exists
         channel.exchange_declare(
