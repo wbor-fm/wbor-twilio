@@ -41,8 +41,8 @@ TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "wbor-rabbitmq")
 RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
 RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
-GROUPME_QUEUE = os.getenv("GROUPME_QUEUE", "groupme")
-POSTGRES_QUEUE = os.getenv("POSTGRES_QUEUE", "postgres")
+GROUPME_KEY = os.getenv("GROUPME_KEY", "groupme")
+POSTGRES_KEY = os.getenv("POSTGRES_KEY", "postgres")
 REDIS_HOST = os.getenv("REDIS_HOST", "wbor-redis-server")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
@@ -103,14 +103,14 @@ def delete_ack_event(message_id):
     logger.debug("Deleted ack event for message_id: %s", message_id)
 
 
-def publish_to_queue(queue_name, sms_data):
+def publish_to_exchange(key, sms_data):
     """
     Publishes a message to a RabbitMQ queue.
 
     Routing key is set as the queue name. Uses default exchange.
 
     Parameters:
-    - queue_name (str): The name of the RabbitMQ queue to publish to.
+    - key (str): The name of the message key.
     - sms_data (dict): The message content, which will be converted to JSON format.
     """
     try:
@@ -120,14 +120,16 @@ def publish_to_queue(queue_name, sms_data):
         )
         channel = connection.channel()
 
-        # Declare the queue with the name provided (if it doesn't already exist)
-        # Setting 'durable=True' makes sure that the queue survives server restarts
-        channel.queue_declare(queue=queue_name, durable=True)
+        channel.exchange_declare(
+            exchange="source_exchange",  
+            exchange_type="topic",       
+            durable=True # Ensures the exchange persists after RabbitMQ restarts
+        )
 
-        # Publish message to queue
+        # Publish message to exchange
         channel.basic_publish(
-            exchange="",
-            routing_key=queue_name,  # Routing key determines which queue gets the message
+            exchange="source_exchange",
+            routing_key=f"source.{key}",  # Routing key determines which queue gets the message
             body=json.dumps(
                 sms_data
             ).encode(),  # Encodes msg as bytes. RabbitMQ requires byte data
@@ -136,16 +138,16 @@ def publish_to_queue(queue_name, sms_data):
             ),
         )
         logger.info(
-            "Published SMS message to queue: %s. Message: %s", queue_name, sms_data
+            "Published SMS message to exchange wiith key: %s. Message: %s", key, sms_data
         )
         connection.close()
     except pika.exceptions.AMQPConnectionError as conn_error:
         logger.error(
-            "Connection error when publishing to queue %s: %s", queue_name, conn_error
+            "Connection error when publishing to exchange with key %s: %s", key, conn_error
         )
     except pika.exceptions.AMQPChannelError as chan_error:
         logger.error(
-            "Channel error when publishing to queue %s: %s", queue_name, chan_error
+            "Channel error when publishing to exchange with key %s: %s", key, chan_error
         )
     except json.JSONDecodeError as json_error:
         logger.error("JSON encoding error for message %s: %s", sms_data, json_error)
@@ -276,8 +278,8 @@ def receive_sms():
     sms_data["SenderName"] = sender_name
 
     # Publish to queues in separate threads to avoid blocking
-    Thread(target=publish_to_queue, args=(POSTGRES_QUEUE, sms_data)).start()
-    Thread(target=publish_to_queue, args=(GROUPME_QUEUE, sms_data)).start()
+    Thread(target=publish_to_exchange, args=(POSTGRES_KEY, sms_data)).start()
+    Thread(target=publish_to_exchange, args=(GROUPME_KEY, sms_data)).start()
 
     # Wait for acknowledgment from the GroupMe consumer so that fallback handler can be
     # triggered if the message fails to process for any reason
