@@ -282,7 +282,6 @@ def receive_sms():
     set_ack_event(message_id)
 
     logger.debug("Attempting to fetch caller name for SMS message")
-
     def fetch_name_with_timeout(sms_data, timeout=3):
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(fetch_name, sms_data)
@@ -312,6 +311,7 @@ def receive_sms():
             logger.info("Acknowledgment received for message_id: %s", message_id)
             return str(resp)
     logger.error("Timeout waiting for acknowledgment for message_id: %s", message_id)
+    delete_ack_event(message_id)
     return "Failed to process message", 500
 
 
