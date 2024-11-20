@@ -87,18 +87,38 @@ twilio_client.http_client.logger.setLevel(logging.INFO)
 
 
 def set_ack_event(message_id):
-    """Set an acknowledgment event in Redis with an expiration time."""
+    """
+    Set an acknowledgment event in Redis with an expiration time.
+
+    Parameters:
+    - message_id (str): The unique message ID to set an acknowledgment event for.
+    """
     redis_client.set(message_id, "pending", ex=REDIS_ACK_EXPIRATION)
     logger.debug("Set ack event for message_id: %s", message_id)
 
 
 def get_ack_event(message_id):
-    """Get the acknowledgment status for a message ID."""
-    return redis_client.get(message_id)
+    """
+    Get the acknowledgment status for a message ID.
+
+    Parameters:
+    - message_id (str): The unique message ID to check for acknowledgment.
+
+    Returns:
+    - str: The status of the acknowledgment event (e.g. 'pending', 'acknowledged', None
+    """
+    status = redis_client.get(message_id)
+    logger.debug("Ack event status for message_id %s: %s", message_id, status)
+    return status
 
 
 def delete_ack_event(message_id):
-    """Delete an acknowledgment event from Redis."""
+    """
+    Delete an acknowledgment event from Redis. Used after the message has been processed.
+
+    Parameters:
+    - message_id (str): The unique message ID to delete the acknowledgment
+    """
     redis_client.delete(message_id)
     logger.debug("Deleted ack event for message_id: %s", message_id)
 
@@ -138,7 +158,7 @@ def publish_to_exchange(key, sms_data):
             ),
         )
         logger.info(
-            "Published SMS message to exchange with key: %s. Message: %s",
+            "Published SMS message to exchange with routing key: source.%s. Message content:\n%s",
             key,
             sms_data,
         )
@@ -285,11 +305,13 @@ def receive_sms():
     # Thread(target=publish_to_exchange, args=(POSTGRES_KEY, sms_data)).start()
     Thread(target=publish_to_exchange, args=(GROUPME_KEY, sms_data)).start()
 
+    logger.debug("Waiting for acknowledgment for message_id: %s", message_id)
     # Wait for acknowledgment from the GroupMe consumer so that fallback handler can be
     # triggered if the message fails to process for any reason
     start_time = datetime.now()
     while (datetime.now() - start_time).seconds < REDIS_ACK_EXPIRATION:
         if not get_ack_event(message_id):  # Acknowledgment received
+            logger.info("Acknowledgment received for message_id: %s", message_id)
             return str(resp)
     logger.error("Timeout waiting for acknowledgment for message_id: %s", message_id)
     return "Failed to process message", 500
