@@ -256,7 +256,7 @@ def acknowledge():
         logger.error("Invalid acknowledgment data: %s", ack_data)
         return "Invalid acknowledgment", 400
 
-    message_id = ack_data["wbor_message_id"]
+    message_id = ack_data.get("wbor_message_id")
 
     if get_ack_event(message_id):
         logger.info("Acknowledgment received for message_id: %s", message_id)
@@ -370,7 +370,7 @@ def log_webhook():
     """
     data = request.get_json()
     logger.debug("Received Voice Intelligence webhook fire with data: %s", data)
-    logger.debug("Transcript SID: %s", data.transcript_sid)
+    logger.debug("Transcript SID: %s", data.get("transcript_sid"))
     return "Accepted", 202
 
 
