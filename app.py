@@ -121,13 +121,14 @@ def delete_ack_event(message_id):
     logger.debug("Deleted ack event for message_id: %s", message_id)
 
 
-def publish_to_exchange(key, sms_data):
+def publish_to_exchange(key, sub_key, data):
     """
     Publishes a message to a RabbitMQ queue.
 
     Parameters:
     - key (str): The name of the message key.
-    - sms_data (dict): The message content, which will be converted to JSON format.
+    - sub_key (str): The name of the sub-key for the message. (e.g. 'sms', 'call')
+    - data (dict): The message content, which will be converted to JSON format.
     """
     try:
         logger.debug("Attempting to connect to RabbitMQ...")
@@ -151,9 +152,9 @@ def publish_to_exchange(key, sms_data):
         # Publish message to exchange
         channel.basic_publish(
             exchange="source_exchange",
-            routing_key=f"source.{key}",  # Routing key determines which queue gets the message
+            routing_key=f"source.{key}.{sub_key}",  # Routing key determines which queue gets the message
             body=json.dumps(
-                sms_data
+                {**data, "type": sub_key}  # Include type in the message body
             ).encode(),  # Encodes msg as bytes. RabbitMQ requires byte data
             properties=pika.BasicProperties(
                 headers={"x-retry-count": 0},  # Initialize retry count for other consumers
@@ -161,9 +162,10 @@ def publish_to_exchange(key, sms_data):
             ),
         )
         logger.info(
-            "Published SMS message to exchange with routing key: source.%s. Message content:\n%s",
+            "Published message to exchange with routing key: source.%s.%s. Message content:\n%s",
             key,
-            sms_data,
+            sub_key,
+            data,
         )
         connection.close()
     except pika.exceptions.AMQPConnectionError as conn_error:
@@ -177,7 +179,7 @@ def publish_to_exchange(key, sms_data):
             "Channel error when publishing to exchange with key %s: %s", key, chan_error
         )
     except json.JSONDecodeError as json_error:
-        logger.error("JSON encoding error for message %s: %s", sms_data, json_error)
+        logger.error("JSON encoding error for message %s: %s", data, json_error)
 
 
 def validate_twilio_request(f):
@@ -305,7 +307,7 @@ def receive_sms():
     sms_data["SenderName"] = sender_name
 
     # Publish to queues in separate threads to avoid blocking
-    Thread(target=publish_to_exchange, args=(SOURCE, sms_data)).start()
+    Thread(target=publish_to_exchange, args=(SOURCE, "sms", sms_data)).start()
 
     logger.debug("Waiting for acknowledgment for message_id: %s", message_id)
     # Wait for acknowledgment from the GroupMe consumer so that fallback handler can be
