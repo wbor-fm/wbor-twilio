@@ -156,6 +156,7 @@ def publish_to_exchange(key, sms_data):
                 sms_data
             ).encode(),  # Encodes msg as bytes. RabbitMQ requires byte data
             properties=pika.BasicProperties(
+                headers={"x-retry-count": 0},  # Initialize retry count for other consumers
                 delivery_mode=2,  # Persistent message - write to disk for safety
             ),
         )
