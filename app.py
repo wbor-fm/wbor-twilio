@@ -107,7 +107,9 @@ def get_ack_event(message_id):
     Returns:
     - str: The status of the acknowledgment event (e.g. 'pending', 'acknowledged', None
     """
-    return redis_client.get(message_id)
+    ack_event = redis_client.get(message_id)
+    logger.debug("Retrieved ack event for message_id: %s", message_id)
+    return ack_event
 
 
 def delete_ack_event(message_id):
@@ -117,8 +119,13 @@ def delete_ack_event(message_id):
     Parameters:
     - message_id (str): The unique message ID to delete the acknowledgment
     """
-    redis_client.delete(message_id)
-    logger.debug("Deleted ack event for message_id: %s", message_id)
+    if redis_client.exists(message_id):
+        redis_client.delete(message_id)
+        logger.debug("Deleted ack event for message_id: %s", message_id)
+    else:
+        logger.warning(
+            "Attempted to delete non-existent ack event for message_id: %s", message_id
+        )
 
 
 def publish_to_exchange(key, sub_key, data):
@@ -152,31 +159,37 @@ def publish_to_exchange(key, sub_key, data):
         # Publish message to exchange
         channel.basic_publish(
             exchange="source_exchange",
-            routing_key=f"source.{key}.{sub_key}",  # Routing key determines which queue gets the message
+            routing_key=f"source.{key}.{sub_key}",  # Key determines which queue gets the message
             body=json.dumps(
                 {**data, "type": sub_key}  # Include type in the message body
             ).encode(),  # Encodes msg as bytes. RabbitMQ requires byte data
             properties=pika.BasicProperties(
-                headers={"x-retry-count": 0},  # Initialize retry count for other consumers
+                headers={
+                    "x-retry-count": 0
+                },  # Initialize retry count for other consumers
                 delivery_mode=2,  # Persistent message - write to disk for safety
             ),
         )
         logger.info(
-            "Published message to exchange with routing key: source.%s.%s. Message content:\n%s",
+            "Published message to exchange with routing key: source.%s.%s. Message UID:\n%s",
             key,
             sub_key,
-            data,
+            data.get("wbor_message_id"),
         )
         connection.close()
     except pika.exceptions.AMQPConnectionError as conn_error:
         logger.error(
-            "Connection error when publishing to exchange with key %s: %s",
+            'Connection error when publishing to exchange with routing key "source.%s.%s": %s',
             key,
+            sub_key,
             conn_error,
         )
     except pika.exceptions.AMQPChannelError as chan_error:
         logger.error(
-            "Channel error when publishing to exchange with key %s: %s", key, chan_error
+            'Channel error when publishing to exchange with routing key "source.%s.%s": %s',
+            key,
+            sub_key,
+            chan_error,
         )
     except json.JSONDecodeError as json_error:
         logger.error("JSON encoding error for message %s: %s", data, json_error)
@@ -256,16 +269,19 @@ def acknowledge():
     """
     ack_data = request.json
     if not ack_data or "wbor_message_id" not in ack_data:
-        logger.error("Invalid acknowledgment data: %s", ack_data)
+        logger.error(
+            "Invalid acknowledgment data received at /acknowledge: %s", ack_data
+        )
         return "Invalid acknowledgment", 400
 
     message_id = ack_data.get("wbor_message_id")
+    logger.debug("Received acknowledgment for message_id: %s", message_id)
 
     if get_ack_event(message_id):
-        logger.info("Acknowledgment received for message_id: %s", message_id)
         delete_ack_event(message_id)
         return "Acknowledgment received", 200
-    logger.warning("Acknowledgment for unknown message_id: %s", message_id)
+
+    logger.warning("Acknowledgment received for unknown message_id: %s", message_id)
     return "Unknown message_id", 404
 
 
@@ -312,6 +328,9 @@ def receive_sms():
     logger.debug("Waiting for acknowledgment for message_id: %s", message_id)
     # Wait for acknowledgment from the GroupMe consumer so that fallback handler can be
     # triggered if the message fails to process for any reason
+
+    # Note: this requires more than one worker process to work properly
+    # (since the main thread is blocked waiting for the /acknowledgment)
     start_time = datetime.now()
     while (datetime.now() - start_time).seconds < REDIS_ACK_EXPIRATION:
         if not get_ack_event(message_id):  # Acknowledgment received
