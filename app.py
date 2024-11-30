@@ -333,8 +333,8 @@ def receive_sms():
     # (since the main thread is blocked waiting for the /acknowledgment)
     start_time = datetime.now()
     while (datetime.now() - start_time).seconds < REDIS_ACK_EXPIRATION:
-        if not get_ack_event(message_id):  # Acknowledgment received
-            return str(resp)
+        if not redis_client.get(message_id):
+            return str(resp) # Break look when received
     logger.error("Timeout waiting for acknowledgment for message_id: %s", message_id)
     delete_ack_event(message_id)
     return "Failed to process message", 500
@@ -416,4 +416,5 @@ def hello_world():
 
 
 if __name__ == "__main__":
+    logger.info("Starting wbor-twilio...")
     app.run(host="0.0.0.0", port=APP_PORT)
