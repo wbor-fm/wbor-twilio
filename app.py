@@ -260,6 +260,117 @@ def fetch_name(sms_data):
         return "Unknown"
 
 
+def send_sms(recipient_number, message_body):
+    """
+    Sends an SMS message using the Twilio API.
+    Logs calls to Postgres.
+
+    Parameters:
+    - recipient_number (str): The phone number to send the message to (in E.164 format).
+    - message_body (str): The body of the SMS message.
+
+    Returns:
+    - str: The SID of the sent message if successful.
+
+    Raises:
+    - Exception: If the message fails to send.
+    """
+    if not recipient_number or not message_body:
+        logger.error("Recipient number or message body cannot be empty")
+        raise ValueError("Recipient number and message body are required")
+
+    if len(message_body) > TWILIO_CHARACTER_LIMIT:
+        logger.error(
+            "Message body exceeds Twilio's character limit of %d",
+            TWILIO_CHARACTER_LIMIT,
+        )
+        raise ValueError(
+            f"Message exceeds the character limit of {TWILIO_CHARACTER_LIMIT}"
+        )
+
+    try:
+        logger.info("Attempting to send SMS to %s", recipient_number)
+        message = twilio_client.messages.create(
+            to=recipient_number,
+            from_=TWILIO_PHONE_NUMBER,
+            body=message_body,
+        )
+
+        # TO-DO Log the message to Postgres here
+
+        logger.info("SMS sent successfully. SID: %s", message.sid)
+        return message.sid
+    except TwilioRestException as e:
+        logger.error("Failed to send SMS to %s: %s", recipient_number, str(e))
+
+
+def start_outgoing_message_consumer():
+    """
+    Starts a RabbitMQ consumer for the outgoing message queue.
+    Handles sending SMS messages using the Twilio API.
+    """
+
+    def process_outgoing_message(channel, method, _properties, body):
+        try:
+            message = json.loads(body)
+            recipient_number = message.get("recipient_number")
+            sms_body = message.get("message")
+            if not recipient_number or not sms_body:
+                logger.warning("Invalid message format: %s", message)
+                channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                return
+
+            # Attempt to send the SMS
+            msg_sid = send_sms(recipient_number, sms_body)
+            if msg_sid:
+                # Acknowledge the message
+                logger.info("Message sent successfully. SID: %s", msg_sid)
+                channel.basic_ack(delivery_tag=method.delivery_tag)
+                logger.info("Message processed and acknowledged: %s", message)
+
+        except Exception as e:
+            logger.error("Failed to process message: %s", str(e))
+            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+
+    def consumer_thread():
+        try:
+            logger.info("Connecting to RabbitMQ for outgoing SMS messages...")
+            credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
+            parameters = pika.ConnectionParameters(
+                host=RABBITMQ_HOST,
+                credentials=credentials,
+                client_properties={"connection_name": "OutgoingSMSConsumerConnection"},
+            )
+            connection = pika.BlockingConnection(parameters)
+            channel = connection.channel()
+
+            # Declare the queue
+            channel.queue_declare(queue="source.twilio.outgoing.sms", durable=True)
+
+            # Start consuming messages
+            channel.basic_qos(
+                prefetch_count=1
+            )  # Ensure one message is processed at a time
+            channel.basic_consume(
+                queue="source.twilio.outgoing.sms",
+                on_message_callback=process_outgoing_message,
+            )
+
+            logger.info("Outgoing message consumer is ready. Waiting for messages...")
+            channel.start_consuming()
+        except pika.exceptions.AMQPConnectionError as conn_error:
+            logger.error("Failed to connect to RabbitMQ: %s", conn_error)
+        except Exception as e:
+            logger.error("Unexpected error in the consumer thread: %s", str(e))
+        finally:
+            connection.close()
+
+    Thread(target=consumer_thread, daemon=True).start()
+
+
+# Routes
+
+
 @app.route("/acknowledge", methods=["POST"])
 def acknowledge():
     """
@@ -322,7 +433,6 @@ def receive_sms():
         sender_name = "Unknown"
     sms_data["SenderName"] = sender_name
 
-    # Publish to queues in separate threads to avoid blocking
     Thread(target=publish_to_exchange, args=(SOURCE, "sms", sms_data)).start()
 
     logger.debug("Waiting for acknowledgment for message_id: %s", message_id)
@@ -334,14 +444,14 @@ def receive_sms():
     start_time = datetime.now()
     while (datetime.now() - start_time).seconds < REDIS_ACK_EXPIRATION:
         if not redis_client.get(message_id):
-            return str(resp) # Break look when received
+            return str(resp)  # Break look when received
     logger.error("Timeout waiting for acknowledgment for message_id: %s", message_id)
     delete_ack_event(message_id)
     return "Failed to process message", 500
 
 
 @app.route("/send", methods=["GET"])
-def send_sms():
+def browser_queue_outgoing_sms():
     """
     Send an SMS message using the Twilio API from a browser address bar. Requires a password.
 
@@ -366,18 +476,25 @@ def send_sms():
     if len(message) > TWILIO_CHARACTER_LIMIT:
         logger.warning("Message too long: %d characters", len(message))
         abort(400, "Message exceeds character limit")
-    try:
-        logger.debug("Attempting to send message to %s", recipient_number)
-        msg = twilio_client.messages.create(
-            to=recipient_number, from_=TWILIO_PHONE_NUMBER, body=message
-        )
-        logger.info("Message sent successfully. SID: %s", msg.sid)
-        message = f"Message sent to {recipient_number}\nBody: {message}"
-        return message
 
-    except TwilioRestException as e:
-        logger.error("Failed to send message: %s", str(e))
-        abort(500, f"Failed to send message: {e}")
+    # Queue the message for sending
+    message_id = str(uuid4())  # Generate a unique ID for tracking
+    outgoing_message = {
+        "wbor_message_id": message_id,
+        "recipient_number": recipient_number,
+        "message": message,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    publish_to_exchange("outgoing", "sms", outgoing_message)
+    logger.info("Message queued for sending. Message ID: %s", message_id)
+    return f"Message queued for sending to {recipient_number}"
+    # logger.debug("Attempting to send message to %s", recipient_number)
+    # msg = twilio_client.messages.create(
+    #     to=recipient_number, from_=TWILIO_PHONE_NUMBER, body=message
+    # )
+    # logger.info("Message sent successfully. SID: %s", msg.sid)
+    # message = f"Message sent to {recipient_number}\nBody: {message}"
+    # return message
 
 
 @app.route("/voice-intelligence", methods=["POST"])
@@ -415,5 +532,11 @@ def hello_world():
     return "<h1>wbor-twilio is online!</h1>"
 
 
+# Main
+
+
 if __name__ == "__main__":
+    # Start the outgoing message consumer
+    start_outgoing_message_consumer()
+
     app.run(host="0.0.0.0", port=APP_PORT)
