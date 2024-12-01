@@ -1,9 +1,67 @@
 """
 Twilio Handler.
-- Publishes incoming messages to a RabbitMQ queue.
-- Endpoint to send messages from our station number (behind password).
 
-TO-DO:
+We have a Twilio phone number that can receive SMS messages & more.
+When a SMS message is received at this number, the primary handler is configured as this Flask app.
+If this app doesn't respond with an OK status code, Twilio will fall back to the secondary 
+handler (which is a Twilio function).
+
+This app has two primary functions:
+1. Publish incoming SMS messages to RabbitMQ for processing by other services.
+2. Send outgoing SMS messages using the Twilio API.
+
+Future functionality may include (e.g. logging in PG):
+- Handling incoming voice intelligence data (at /voice-intelligence).
+- Handling incoming call events (at /call-events).
+
+The workflows are as follows.
+
+Incoming SMS:
+1. A SMS message is received by Twilio.
+2. Twilio sends the message to this app at the /sms endpoint.
+3. @validate_twilio_request decorator validates the authenticity of the request.
+4. A unique message ID is generated and added to the message data as 'wbor_message_id'.
+    - TODO: use Twilio SID instead of UUID?
+5. An acknowledgment event is set in Redis with the message ID.
+    - This is used to ensure the message is processed properly downstream by wbor-groupme.
+6. Twilio phone number lookup is used to fetch the name of the sender and add it to the 
+   message data if available.
+    - If the lookup fails, the sender name is set to 'Unknown'.
+7. The message data is published to RabbitMQ with the routing key 'source.twilio.sms.incoming'.
+    - Asserts that `source_exchange` exists
+    - Publishes the message to the exchange with the routing key
+        - Routing key is in the format 'source.<source>.<type>'
+            - e.g. 'source.twilio.sms.incoming' or 'source.twilio.sms.outgoing'
+        - The message type is also included in the message body
+8. The main thread waits for an acknowledgment from the /acknowledge endpoint, indicating 
+   successful processing by GroupMe.
+    - If the acknowledgment is not received within a timeout, the message is discarded.
+    - Subsequently, Twilio will fall back to the secondary handler.
+    - NOTE: /acknowledge requires more than one worker process to work properly.
+    - NOTE: /acknowledge does not validate the source of the acknowledgment, which is a potential 
+      security risk (though unlikely).
+9. Upon receiving the acknowledgment, return an empty TwiML response to Twilio to acknowledge 
+   receipt of the message.
+
+Outgoing SMS:
+
+0. Upon launching the app, a consumer thread is started to listen for outgoing SMS messages.
+    - The consumer listens for messages with the routing key 'source.twilio.sms.outgoing'.
+1. GET using the /send endpoint in a browser.
+    - Expects a password for authorization set by APP_PASSWORD.
+    - Expects `recipient_number` and `message` as query parameters.
+2. Validates the recipient number and message body.
+    - `recipient_number` must be in E.164 format.
+    - `message` must not exceed the Twilio character limit.
+    - `message` body must exist.
+3. Generates a unique message ID for tracking, set as `wbor_message_id`.
+    - TODO: consider using Twilio SID instead of UUID? Later in the process?
+4. Prepares the outgoing message data, including a timestamp.
+5. Publishes it to RabbitMQ with the routing key 'source.twilio.sms.outgoing'.
+6. The consumer thread consumes by running process_outgoing_message.
+
+
+TODO:
 - Implement a retry mechanism for failed message processing
 - Implement a message queue for outgoing messages?
 - Do something with incoming voice intelligence data
@@ -49,6 +107,8 @@ REDIS_ACK_EXPIRATION = int(os.getenv("REDIS_ACK_EXPIRATION", "60"))  # in second
 TWILIO_CHARACTER_LIMIT = 1600  # Twilio SMS character limit
 
 SOURCE = "twilio"  # Define source name for RabbitMQ exchange purposes
+EXCHANGE = "source_exchange"
+OUTGOING_QUEUE = "outgoing_sms"
 
 # Logging
 logger = logging.getLogger(__name__)
@@ -84,6 +144,9 @@ app = Flask(__name__)
 
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 twilio_client.http_client.logger.setLevel(logging.INFO)
+
+
+# Redis
 
 
 def set_ack_event(message_id):
@@ -128,6 +191,9 @@ def delete_ack_event(message_id):
         )
 
 
+# RabbitMQ
+
+
 def publish_to_exchange(key, sub_key, data):
     """
     Publishes a message to a RabbitMQ queue.
@@ -151,15 +217,15 @@ def publish_to_exchange(key, sub_key, data):
 
         # Assert the exchange exists
         channel.exchange_declare(
-            exchange="source_exchange",
+            exchange=EXCHANGE,
             exchange_type="topic",
-            durable=True,  # Ensures the exchange persists after RabbitMQ restarts
+            durable=True,
         )
 
         # Publish message to exchange
         channel.basic_publish(
-            exchange="source_exchange",
-            routing_key=f"source.twilio.{key}.{sub_key}",  # Key determines queue getting message
+            exchange=EXCHANGE,
+            routing_key=f"source.{key}.{sub_key}",
             body=json.dumps(
                 {**data, "type": sub_key}  # Include type in the message body
             ).encode(),  # Encodes msg as bytes. RabbitMQ requires byte data
@@ -171,8 +237,9 @@ def publish_to_exchange(key, sub_key, data):
             ),
         )
         logger.info(
-            "Published message to `source_exchange` with routing key: "
-            "`source.twilio.%s.%s`. Message UID:\n%s",
+            "Published message to `%s` with routing key: "
+            "`source.%s.%s`. Message UID:\n%s",
+            EXCHANGE,
             key,
             sub_key,
             data.get("wbor_message_id"),
@@ -180,15 +247,17 @@ def publish_to_exchange(key, sub_key, data):
         connection.close()
     except pika.exceptions.AMQPConnectionError as conn_error:
         logger.error(
-            "Connection error when publishing to exchange with routing key "
-            "`source.twilio.%s.%s`: %s",
+            "Connection error when publishing to `%s` with routing key "
+            "`source.%s.%s`: %s",
+            EXCHANGE,
             key,
             sub_key,
             conn_error,
         )
     except pika.exceptions.AMQPChannelError as chan_error:
         logger.error(
-            "Channel error when publishing to exchange with routing key `source.twilio.%s.%s`: %s",
+            "Channel error when publishing to `%s` with routing key `source.%s.%s`: %s",
+            EXCHANGE,
             key,
             sub_key,
             chan_error,
@@ -298,12 +367,13 @@ def send_sms(recipient_number, message_body):
             body=message_body,
         )
 
-        # TO-DO Log the message to Postgres here
+        # TODO Log the message to Postgres here - possibly use SID instead of UUID?
 
         logger.info("SMS sent successfully. SID: %s", message.sid)
         return message.sid
     except TwilioRestException as e:
         logger.error("Failed to send SMS to %s: %s", recipient_number, str(e))
+        return None
 
 
 def start_outgoing_message_consumer():
@@ -362,12 +432,17 @@ def start_outgoing_message_consumer():
                 channel = connection.channel()
 
                 # Declare the queue
-                channel.queue_declare(queue="twilio", durable=True)
+                channel.queue_declare(queue=OUTGOING_QUEUE, durable=True)
+                channel.queue_bind(
+                    queue=OUTGOING_QUEUE,
+                    exchange=EXCHANGE,
+                    routing_key="source.twilio.sms.outgoing",  # Only bind to this key
+                )
 
                 # Ensure one message is processed at a time
                 channel.basic_qos(prefetch_count=1)
                 channel.basic_consume(
-                    queue="twilio",
+                    queue=OUTGOING_QUEUE,
                     on_message_callback=process_outgoing_message,
                 )
 
@@ -377,8 +452,6 @@ def start_outgoing_message_consumer():
                 channel.start_consuming()
             except pika.exceptions.AMQPConnectionError as conn_error:
                 logger.error("Failed to connect to RabbitMQ: %s", conn_error)
-            except Exception as e:
-                logger.error("Unexpected error in the consumer thread: %s", str(e))
             finally:
                 connection.close()
 
@@ -389,7 +462,7 @@ def start_outgoing_message_consumer():
 
 
 @app.route("/acknowledge", methods=["POST"])
-def acknowledge():
+def groupme_acknowledge():
     """
     Endpoint for receiving acknowledgment from the GROUPME_QUEUE consumer.
 
@@ -409,8 +482,10 @@ def acknowledge():
         delete_ack_event(message_id)
         return "Acknowledgment received", 200
 
-    logger.warning("Acknowledgment received for unknown message_id: %s", message_id)
-    return "Unknown message_id", 404
+    logger.warning(
+        "Acknowledgment received for unknown wbor_message_id: %s", message_id
+    )
+    return "Unknown wbor_message_id", 404
 
 
 @app.route("/sms", methods=["GET", "POST"])
@@ -434,7 +509,7 @@ def receive_sms():
 
     logger.debug("Attempting to fetch caller name for SMS message")
 
-    def fetch_name_with_timeout(sms_data, timeout=3):
+    def fetch_sender(sms_data, timeout=3):
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(fetch_name, sms_data)
             try:
@@ -444,13 +519,13 @@ def receive_sms():
                 return "Unknown"
 
     try:
-        sender_name = fetch_name_with_timeout(sms_data)
+        sender_name = fetch_sender(sms_data)
     except (TwilioRestException, FuturesTimeoutError) as e:
         logger.error("Error fetching sender name: %s", str(e))
         sender_name = "Unknown"
     sms_data["SenderName"] = sender_name
 
-    Thread(target=publish_to_exchange, args=(SOURCE, "sms", sms_data)).start()
+    Thread(target=publish_to_exchange, args=(SOURCE, "sms.incoming", sms_data)).start()
 
     logger.debug("Waiting for acknowledgment for message_id: %s", message_id)
     # Wait for acknowledgment from the GroupMe consumer so that fallback handler can be
@@ -461,8 +536,14 @@ def receive_sms():
     start_time = datetime.now()
     while (datetime.now() - start_time).seconds < REDIS_ACK_EXPIRATION:
         if not redis_client.get(message_id):
-            return str(resp)  # Break look when received
-    logger.error("Timeout waiting for acknowledgment for message_id: %s", message_id)
+            # /acknowledge was received
+            # /acknowledge deletes the ack event from Redis
+            # So if it's not found, the message was processed
+            # Return an empty TwiML response to acknowledge receipt of the message
+            return str(resp)
+    logger.error(
+        "Timeout met while waiting for acknowledgment for message_id: %s", message_id
+    )
     delete_ack_event(message_id)
     return "Failed to process message", 500
 
@@ -503,16 +584,12 @@ def browser_queue_outgoing_sms():
         "message": message,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    publish_to_exchange("outgoing", "sms", outgoing_message)
+    publish_to_exchange(SOURCE, "sms.outgoing", outgoing_message)
     logger.info("Message queued for sending. Message ID: %s", message_id)
     return f"Message queued for sending to {recipient_number}"
-    # logger.debug("Attempting to send message to %s", recipient_number)
-    # msg = twilio_client.messages.create(
-    #     to=recipient_number, from_=TWILIO_PHONE_NUMBER, body=message
-    # )
-    # logger.info("Message sent successfully. SID: %s", msg.sid)
-    # message = f"Message sent to {recipient_number}\nBody: {message}"
-    # return message
+
+
+# Future functionality
 
 
 @app.route("/voice-intelligence", methods=["POST"])
