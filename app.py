@@ -159,7 +159,7 @@ def publish_to_exchange(key, sub_key, data):
         # Publish message to exchange
         channel.basic_publish(
             exchange="source_exchange",
-            routing_key=f"source.{key}.{sub_key}",  # Key determines which queue gets the message
+            routing_key=f"source.twilio.{key}.{sub_key}",  # Key determines which queue gets the message
             body=json.dumps(
                 {**data, "type": sub_key}  # Include type in the message body
             ).encode(),  # Encodes msg as bytes. RabbitMQ requires byte data
