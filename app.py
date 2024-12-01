@@ -109,6 +109,7 @@ TWILIO_CHARACTER_LIMIT = 1600  # Twilio SMS character limit
 SOURCE = "twilio"  # Define source name for RabbitMQ exchange purposes
 EXCHANGE = "source_exchange"
 OUTGOING_QUEUE = "outgoing_sms"
+SMS_OUTGOING_KEY = "twilio.sms.outgoing"
 
 # Logging
 logger = logging.getLogger(__name__)
@@ -386,7 +387,7 @@ def start_outgoing_message_consumer():
         logger.debug("Received message with routing key: %s", method.routing_key)
 
         # Validate routing key
-        if method.routing_key != "source.twilio.outgoing.sms":
+        if method.routing_key != SMS_OUTGOING_KEY:
             logger.warning(
                 "Discarding message due to mismatched routing key: %s",
                 method.routing_key,
@@ -436,7 +437,7 @@ def start_outgoing_message_consumer():
                 channel.queue_bind(
                     queue=OUTGOING_QUEUE,
                     exchange=EXCHANGE,
-                    routing_key="source.twilio.sms.outgoing",  # Only bind to this key
+                    routing_key=SMS_OUTGOING_KEY,  # Only bind to this key
                 )
 
                 # Ensure one message is processed at a time
@@ -535,11 +536,11 @@ def receive_sms():
     # (since the main thread is blocked waiting for the /acknowledgment)
     start_time = datetime.now()
     while (datetime.now() - start_time).seconds < REDIS_ACK_EXPIRATION:
-        if not redis_client.get(message_id):
-            # /acknowledge was received
-            # /acknowledge deletes the ack event from Redis
+        ack_status = redis_client.get(message_id)
+        if not ack_status:  # ACK received (deleted by /acknowledge endpoint)
             # So if it's not found, the message was processed
             # Return an empty TwiML response to acknowledge receipt of the message
+            logger.info("Acknowledgment received for message_id: %s", message_id)
             return str(resp)
     logger.error(
         "Timeout met while waiting for acknowledgment for message_id: %s", message_id
