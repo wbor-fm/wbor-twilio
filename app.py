@@ -159,7 +159,7 @@ def publish_to_exchange(key, sub_key, data):
         # Publish message to exchange
         channel.basic_publish(
             exchange="source_exchange",
-            routing_key=f"source.twilio.{key}.{sub_key}",  # Key determines which queue gets the message
+            routing_key=f"source.twilio.{key}.{sub_key}",  # Key determines queue getting message
             body=json.dumps(
                 {**data, "type": sub_key}  # Include type in the message body
             ).encode(),  # Encodes msg as bytes. RabbitMQ requires byte data
@@ -171,7 +171,7 @@ def publish_to_exchange(key, sub_key, data):
             ),
         )
         logger.info(
-            "Published message to exchange with routing key: source.%s.%s. Message UID:\n%s",
+            "Published message to `source_exchange` with routing key: `source.twilio.%s.%s`. Message UID:\n%s",
             key,
             sub_key,
             data.get("wbor_message_id"),
@@ -179,14 +179,14 @@ def publish_to_exchange(key, sub_key, data):
         connection.close()
     except pika.exceptions.AMQPConnectionError as conn_error:
         logger.error(
-            'Connection error when publishing to exchange with routing key "source.%s.%s": %s',
+            "Connection error when publishing to exchange with routing key `source.twilio.%s.%s`: %s",
             key,
             sub_key,
             conn_error,
         )
     except pika.exceptions.AMQPChannelError as chan_error:
         logger.error(
-            'Channel error when publishing to exchange with routing key "source.%s.%s": %s',
+            "Channel error when publishing to exchange with routing key `source.twilio.%s.%s`: %s",
             key,
             sub_key,
             chan_error,
@@ -311,6 +311,12 @@ def start_outgoing_message_consumer():
     """
 
     def process_outgoing_message(channel, method, _properties, body):
+        # Check whether the key is for the outgoing queue
+        if method.routing_key != "source.twilio.outgoing.sms":
+            logger.warning("Routing key not for us: %s", method.routing_key)
+            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            return
+
         try:
             message = json.loads(body)
             recipient_number = message.get("recipient_number")
@@ -345,14 +351,14 @@ def start_outgoing_message_consumer():
             channel = connection.channel()
 
             # Declare the queue
-            channel.queue_declare(queue="source.twilio.outgoing.sms", durable=True)
+            channel.queue_declare(queue="twilio", durable=True)
 
             # Start consuming messages
             channel.basic_qos(
                 prefetch_count=1
             )  # Ensure one message is processed at a time
             channel.basic_consume(
-                queue="source.twilio.outgoing.sms",
+                queue="twilio",
                 on_message_callback=process_outgoing_message,
             )
 
