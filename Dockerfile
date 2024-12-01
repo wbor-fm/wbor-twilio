@@ -17,4 +17,4 @@ EXPOSE 5000
 
 # Start Flask app with Gunicorn on port 5000, with 4 worker processes
 # Note: at least two worker processes are necessary to avoid blocking
-CMD ["gunicorn", "--workers", "4", "--bind", "0.0.0.0:5000", "app:app"]
+CMD ["gunicorn", "--workers", "4", "--bind", "0.0.0.0:5000", "app:app", "-c", "gunicorn_config.py"]

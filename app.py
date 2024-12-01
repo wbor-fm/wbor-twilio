@@ -458,6 +458,7 @@ def browser_queue_outgoing_sms():
     Expects recipient_number to be in E.164 format, e.g. +12077253250.
     Encoding the `+` as %2B also works.
     """
+    logger.debug("Received request to send SMS from browser...")
     # Don't let strangers send messages as if they were us!
     password = request.args.get("password")
     if password != APP_PASSWORD:
@@ -536,7 +537,4 @@ def hello_world():
 
 
 if __name__ == "__main__":
-    # Start the outgoing message consumer
-    start_outgoing_message_consumer()
-
     app.run(host="0.0.0.0", port=APP_PORT)
