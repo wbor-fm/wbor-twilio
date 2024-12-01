@@ -171,7 +171,8 @@ def publish_to_exchange(key, sub_key, data):
             ),
         )
         logger.info(
-            "Published message to `source_exchange` with routing key: `source.twilio.%s.%s`. Message UID:\n%s",
+            "Published message to `source_exchange` with routing key: "
+            "`source.twilio.%s.%s`. Message UID:\n%s",
             key,
             sub_key,
             data.get("wbor_message_id"),
@@ -179,7 +180,8 @@ def publish_to_exchange(key, sub_key, data):
         connection.close()
     except pika.exceptions.AMQPConnectionError as conn_error:
         logger.error(
-            "Connection error when publishing to exchange with routing key `source.twilio.%s.%s`: %s",
+            "Connection error when publishing to exchange with routing key "
+            "`source.twilio.%s.%s`: %s",
             key,
             sub_key,
             conn_error,
@@ -311,9 +313,14 @@ def start_outgoing_message_consumer():
     """
 
     def process_outgoing_message(channel, method, _properties, body):
-        # Check whether the key is for the outgoing queue
+        logger.debug("Received message with routing key: %s", method.routing_key)
+
+        # Validate routing key
         if method.routing_key != "source.twilio.outgoing.sms":
-            logger.warning("Routing key not for us: %s", method.routing_key)
+            logger.warning(
+                "Discarding message due to mismatched routing key: %s",
+                method.routing_key,
+            )
             channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
             return
 
@@ -329,47 +336,51 @@ def start_outgoing_message_consumer():
             # Attempt to send the SMS
             msg_sid = send_sms(recipient_number, sms_body)
             if msg_sid:
-                # Acknowledge the message
                 logger.info("Message sent successfully. SID: %s", msg_sid)
                 channel.basic_ack(delivery_tag=method.delivery_tag)
-                logger.info("Message processed and acknowledged: %s", message)
 
+        except ValueError as ve:
+            logger.error("Validation error: %s. Discarding message.", ve)
+            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
         except Exception as e:
             logger.error("Failed to process message: %s", str(e))
-            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
     def consumer_thread():
-        try:
-            logger.info("Connecting to RabbitMQ for outgoing SMS messages...")
-            credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
-            parameters = pika.ConnectionParameters(
-                host=RABBITMQ_HOST,
-                credentials=credentials,
-                client_properties={"connection_name": "OutgoingSMSConsumerConnection"},
-            )
-            connection = pika.BlockingConnection(parameters)
-            channel = connection.channel()
+        while True:
+            try:
+                logger.info("Connecting to RabbitMQ for outgoing SMS messages...")
+                credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
+                parameters = pika.ConnectionParameters(
+                    host=RABBITMQ_HOST,
+                    credentials=credentials,
+                    client_properties={
+                        "connection_name": "OutgoingSMSConsumerConnection"
+                    },
+                )
+                connection = pika.BlockingConnection(parameters)
+                channel = connection.channel()
 
-            # Declare the queue
-            channel.queue_declare(queue="twilio", durable=True)
+                # Declare the queue
+                channel.queue_declare(queue="twilio", durable=True)
 
-            # Start consuming messages
-            channel.basic_qos(
-                prefetch_count=1
-            )  # Ensure one message is processed at a time
-            channel.basic_consume(
-                queue="twilio",
-                on_message_callback=process_outgoing_message,
-            )
+                # Ensure one message is processed at a time
+                channel.basic_qos(prefetch_count=1)
+                channel.basic_consume(
+                    queue="twilio",
+                    on_message_callback=process_outgoing_message,
+                )
 
-            logger.info("Outgoing message consumer is ready. Waiting for messages...")
-            channel.start_consuming()
-        except pika.exceptions.AMQPConnectionError as conn_error:
-            logger.error("Failed to connect to RabbitMQ: %s", conn_error)
-        except Exception as e:
-            logger.error("Unexpected error in the consumer thread: %s", str(e))
-        finally:
-            connection.close()
+                logger.info(
+                    "Outgoing message consumer is ready. Waiting for messages..."
+                )
+                channel.start_consuming()
+            except pika.exceptions.AMQPConnectionError as conn_error:
+                logger.error("Failed to connect to RabbitMQ: %s", conn_error)
+            except Exception as e:
+                logger.error("Unexpected error in the consumer thread: %s", str(e))
+            finally:
+                connection.close()
 
     Thread(target=consumer_thread, daemon=True).start()
 
