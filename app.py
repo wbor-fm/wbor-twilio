@@ -21,7 +21,6 @@ Incoming SMS:
 2. Twilio sends the message to this app at the /sms endpoint.
 3. @validate_twilio_request decorator validates the authenticity of the request.
 4. A unique message ID is generated and added to the message data as 'wbor_message_id'.
-    - TODO: use Twilio SID instead of UUID?
 5. An acknowledgment event is set in Redis with the message ID.
     - This is used to ensure the message is processed properly downstream by wbor-groupme.
 6. Twilio phone number lookup is used to fetch the name of the sender and add it to the 
@@ -55,17 +54,26 @@ Outgoing SMS:
     - `message` must not exceed the Twilio character limit.
     - `message` body must exist.
 3. Generates a unique message ID for tracking, set as `wbor_message_id`.
-    - TODO: consider using Twilio SID instead of UUID? Later in the process?
 4. Prepares the outgoing message data, including a timestamp.
 5. Publishes it to RabbitMQ with the routing key 'source.twilio.sms.outgoing'.
 6. The consumer thread consumes by running process_outgoing_message.
 
+Emits keys:
+- `source.twilio.sms.incoming`
+    - Routed to wbor-groupme for processing.
+- `source.twilio.sms.outgoing`
+    - Local queue for sending outgoing SMS messages.
+- `source.twilio.voice-intelligence`
+- `source.twilio.call-events`
+
+Ideas:
+- Use Twilio SID instead of UUID?
 
 TODO:
-- Implement a retry mechanism for failed message processing
-- Implement a message queue for outgoing messages?
-- Do something with incoming voice intelligence data
-- Do something with incoming call events
+- Log incoming voice intelligence data
+    - Store transcripts?
+- Log incoming call events
+    - Store audio files?
 """
 
 import os
@@ -109,7 +117,7 @@ TWILIO_CHARACTER_LIMIT = 1600  # Twilio SMS character limit
 SOURCE = "twilio"  # Define source name for RabbitMQ exchange purposes
 EXCHANGE = "source_exchange"
 OUTGOING_QUEUE = "outgoing_sms"
-SMS_OUTGOING_KEY = "twilio.sms.outgoing"
+SMS_OUTGOING_KEY = "source.twilio.sms.outgoing"
 
 # Logging
 logger = logging.getLogger(__name__)
@@ -277,11 +285,19 @@ def validate_twilio_request(f):
         # Parse and reconstruct the URL to ensure query strings are encoded
         parsed_url = urlparse(request.url)
         query = urlencode(parse_qsl(parsed_url.query, keep_blank_values=True))
+
+        # Ensure the path includes /twilio prefix
+        # This is a hack because I couldn't figure out how to get NGINX to not
+        # strip /twilio when putting this app behind a proxy instead of serving at the root
+        path_with_prefix = parsed_url.path
+        if not path_with_prefix.startswith("/twilio"):
+            path_with_prefix = "/twilio" + path_with_prefix
+
         encoded_url = urlunparse(
             (
                 parsed_url.scheme.replace("http", "https"),
                 parsed_url.netloc,
-                parsed_url.path,
+                path_with_prefix,  # Use the adjusted path
                 parsed_url.params,
                 query,
                 parsed_url.fragment,
@@ -369,8 +385,6 @@ def send_sms(recipient_number, message_body):
         )
 
         # TODO Log the message to Postgres here - possibly use SID instead of UUID?
-
-        logger.info("SMS sent successfully. SID: %s", message.sid)
         return message.sid
     except TwilioRestException as e:
         logger.error("Failed to send SMS to %s: %s", recipient_number, str(e))
@@ -389,8 +403,9 @@ def start_outgoing_message_consumer():
         # Validate routing key
         if method.routing_key != SMS_OUTGOING_KEY:
             logger.warning(
-                "Discarding message due to mismatched routing key: %s",
+                "Discarding message due to mismatched routing key: %s (expecting `%s`)",
                 method.routing_key,
+                SMS_OUTGOING_KEY,
             )
             channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
             return
