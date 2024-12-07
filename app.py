@@ -445,7 +445,8 @@ def start_outgoing_message_consumer():
             except pika.exceptions.AMQPConnectionError as conn_error:
                 logger.error("Failed to connect to RabbitMQ: %s", conn_error)
             finally:
-                connection.close()
+                if 'connection' in locals() and connection.is_open:
+                    connection.close()
 
     Thread(target=consumer_thread, daemon=True).start()
 
