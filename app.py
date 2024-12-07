@@ -261,8 +261,7 @@ def publish_to_exchange(key, sub_key, data):
             ),
         )
         logger.info(
-            "Published message to `%s` with routing key: "
-            "`source.%s.%s`. Message UID: %s",
+            "Published message to `%s` with routing key: `source.%s.%s`. UID: %s",
             EXCHANGE,
             key,
             sub_key,
@@ -359,7 +358,7 @@ def fetch_name(sms_data):
         )
 
         caller_name = phone_info.caller_name or "Unknown"
-        logger.info("Fetched name: %s", caller_name)
+        logger.info("Fetched name: %s", caller_name.get("caller_name", "Unknown"))
         return caller_name.get("caller_name", "Unknown")
     except TwilioRestException as e:
         logger.error(
@@ -533,7 +532,8 @@ def receive_sms():
         If a response is not sent, Twilio will fall back to the secondary message handler.
     """
     sms_data = request.form.to_dict()
-    logger.info("Received SMS message with data: %s", sms_data)
+    logger.debug("Received SMS message: %s", sms_data)
+    logger.info("Processing message from: `%s`", sms_data.get("From"))
     resp = MessagingResponse()  # Required by Twilio
 
     # Generate a unique message ID and add it to the SMS data
@@ -573,7 +573,7 @@ def receive_sms():
         if not ack_status:  # ACK received (deleted by /acknowledge endpoint)
             # So if it's not found, the message was processed
             # Return an empty TwiML response to acknowledge receipt of the message
-            logger.info("Acknowledgment received for: %s", message_id)
+            logger.info("Acknowledgment received: %s", message_id)
             return str(resp)
     logger.error(
         "Timeout met while waiting for acknowledgment for message_id: %s", message_id
