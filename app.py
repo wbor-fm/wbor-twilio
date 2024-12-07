@@ -26,7 +26,8 @@ Incoming SMS:
     - (Upon receipt from the consumer of successful forwarding to GroupMe, 
         response is sent to Twilio.)
 6. Twilio phone number lookup is used to fetch the name of the sender and added to the 
-   message data if available as `SenderName`. If the lookup fails, the sender name is set to `Unknown`.
+   message data if available as `SenderName`. If the lookup fails, the sender name is set to 
+   `Unknown`.
     - If the lookup fails, the sender name is set to `Unknown`.
 7. The message data is published to RabbitMQ with the routing key `source.twilio.sms.incoming`.
     - Sent to `source_exchange` (after asserting that it exists)
@@ -79,9 +80,11 @@ TODO:
 import logging
 import json
 import re
+import sys
 from threading import Thread
 from functools import wraps
 from datetime import datetime, timezone
+import time
 from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from uuid import uuid4
@@ -448,7 +451,17 @@ def start_outgoing_message_consumer():
                 )
                 channel.start_consuming()
             except pika.exceptions.AMQPConnectionError as conn_error:
-                logger.error("Failed to connect to RabbitMQ: %s", conn_error)
+                error_message = str(conn_error)
+                logger.error(
+                    "(Retrying in 5 seconds) Failed to connect to RabbitMQ: %s",
+                    error_message,
+                )
+                if "CONNECTION_FORCED" in error_message and "shutdown" in error_message:
+                    logger.critical(
+                        "Broker shut down the connection. Shutting down consumer."
+                    )
+                    sys.exit(1)  # Exit the process to avoid infinite retries
+                time.sleep(5)
             finally:
                 if "connection" in locals() and connection.is_open:
                     connection.close()
