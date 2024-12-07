@@ -141,9 +141,9 @@ class EasternTimeFormatter(ColoredFormatter):
         return eastern_dt.isoformat()
 
 
-# Define the formatter with color
+# Define the formatter with color and PID
 formatter = EasternTimeFormatter(
-    "%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "%(log_color)s%(asctime)s - PID %(process)d - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     log_colors={
         "DEBUG": "white",
