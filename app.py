@@ -89,6 +89,7 @@ from uuid import uuid4
 import pika
 import pika.exceptions
 import pytz
+from colorlog import ColoredFormatter
 from flask import Flask, abort, request
 from redis import Redis
 from twilio.rest import Client
@@ -128,8 +129,8 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.DEBUG)
 
 
-class EasternTimeFormatter(logging.Formatter):
-    """Custom log formatter to display timestamps in Eastern Time"""
+class EasternTimeFormatter(ColoredFormatter):
+    """Custom log formatter to display timestamps in Eastern Time with colorized output"""
 
     def formatTime(self, record, datefmt=None):
         # Convert UTC to Eastern Time
@@ -140,10 +141,24 @@ class EasternTimeFormatter(logging.Formatter):
         return eastern_dt.isoformat()
 
 
-formatter = EasternTimeFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+# Define the formatter with color
+formatter = EasternTimeFormatter(
+    "%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    log_colors={
+        "DEBUG": "white",
+        "INFO": "green",
+        "WARNING": "yellow",
+        "ERROR": "red",
+        "CRITICAL": "bold_red",
+    },
+)
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
+
+# Configure werkzeug logging to match
 logging.getLogger("werkzeug").setLevel(logging.INFO)
+logging.getLogger("werkzeug").addHandler(console_handler)
 
 redis_client = Redis(
     host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True
@@ -166,7 +181,7 @@ def set_ack_event(message_id):
     - message_id (str): The unique message ID to set an acknowledgment event for.
     """
     redis_client.set(message_id, "pending", ex=REDIS_ACK_EXPIRATION)
-    logger.debug("Set ack event for message_id: %s", message_id)
+    logger.info("Set ack event for message_id: %s", message_id)
 
 
 def get_ack_event(message_id):
@@ -180,7 +195,7 @@ def get_ack_event(message_id):
     - str: The status of the acknowledgment event (e.g. 'pending', 'acknowledged', None
     """
     ack_event = redis_client.get(message_id)
-    logger.debug("Retrieved ack event for message_id: %s", message_id)
+    logger.info("Retrieved ack event for message_id: %s", message_id)
     return ack_event
 
 
@@ -193,7 +208,7 @@ def delete_ack_event(message_id):
     """
     if redis_client.exists(message_id):
         redis_client.delete(message_id)
-        logger.debug("Deleted ack event for message_id: %s", message_id)
+        logger.info("Deleted ack event for message_id: %s", message_id)
     else:
         logger.warning(
             "Attempted to delete non-existent ack event for message_id: %s", message_id
@@ -222,7 +237,7 @@ def publish_to_exchange(key, sub_key, data):
         )
         connection = pika.BlockingConnection(parameters)
         channel = connection.channel()
-        logger.debug("Connected!")
+        logger.info("RabbitMQ connected!")
 
         # Assert the exchange exists
         channel.exchange_declare(
@@ -320,7 +335,12 @@ def validate_twilio_request(f):
 
 def fetch_name(sms_data):
     """
-    Attempt to fetch the name of the sender of the SMS message.
+    Attempt to fetch the name associated with a phone number using the Twilio Lookup API.
+
+    caller_name is the name associated with the phone number in the Twilio database.
+    If the name is not available, it returns 'Unknown'.
+
+    Don't confuse this with the 'From' field in the SMS data, which is the phone number.
 
     Parameters:
     - sms_data (dict): The SMS message data containing the sender's phone number.
@@ -339,7 +359,7 @@ def fetch_name(sms_data):
         )
 
         caller_name = phone_info.caller_name or "Unknown"
-        logger.debug("Fetched caller name: %s", caller_name)
+        logger.info("Fetched name: %s", caller_name)
         return caller_name.get("caller_name", "Unknown")
     except TwilioRestException as e:
         logger.error(
@@ -425,17 +445,17 @@ def start_outgoing_message_consumer():
                 logger.info("Message sent successfully. SID: %s", msg_sid)
                 channel.basic_ack(delivery_tag=method.delivery_tag)
 
+        except (pika.exceptions.AMQPError, json.JSONDecodeError) as e:
+            logger.error("Failed to process message: %s", str(e))
+            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
         except ValueError as ve:
             logger.error("Validation error: %s. Discarding message.", ve)
-            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-        except Exception as e:
-            logger.error("Failed to process message: %s", str(e))
             channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
     def consumer_thread():
         while True:
             try:
-                logger.info("Connecting to RabbitMQ for outgoing SMS messages...")
+                logger.debug("Connecting to RabbitMQ for outgoing SMS messages...")
                 credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
                 parameters = pika.ConnectionParameters(
                     host=RABBITMQ_HOST,
@@ -515,7 +535,7 @@ def receive_sms():
         If a response is not sent, Twilio will fall back to the secondary message handler.
     """
     sms_data = request.form.to_dict()
-    logger.debug("Received SMS message with data: %s", sms_data)
+    logger.info("Received SMS message with data: %s", sms_data)
     resp = MessagingResponse()  # Required by Twilio
 
     # Generate a unique message ID and add it to the SMS data
@@ -531,7 +551,7 @@ def receive_sms():
             try:
                 return future.result(timeout=timeout)
             except FuturesTimeoutError:
-                logger.error("Timeout occurred while fetching sender name")
+                logger.warning("Timeout occurred while fetching sender name")
                 return "Unknown"
 
     try:
@@ -572,7 +592,7 @@ def browser_queue_outgoing_sms():
     Expects recipient_number to be in E.164 format, e.g. +12077253250.
     Encoding the `+` as %2B also works.
     """
-    logger.debug("Received request to send SMS from browser...")
+    logger.info("Received request to send SMS from browser...")
     # Don't let strangers send messages as if they were us!
     password = request.args.get("password")
     if password != APP_PASSWORD:
@@ -619,8 +639,8 @@ def log_webhook():
     - str: A 202 Accepted response.
     """
     data = request.get_json()
-    logger.debug("Received Voice Intelligence webhook fire with data: %s", data)
-    logger.debug("Transcript SID: %s", data.get("transcript_sid"))
+    logger.info("Received Voice Intelligence webhook fire with data: %s", data)
+    logger.info("Transcript SID: %s", data.get("transcript_sid"))
     return "Accepted", 202
 
 
@@ -633,7 +653,7 @@ def log_call_event():
     - str: A 202 Accepted response.
     """
     data = request.form.to_dict()
-    logger.debug("Received Call Event webhook fire with data: %s", data)
+    logger.info("Received Call Event webhook fire with data: %s", data)
     return "Accepted", 202
 
 
