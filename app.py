@@ -423,6 +423,11 @@ def start_outgoing_message_consumer():
                 connection = pika.BlockingConnection(parameters)
                 channel = connection.channel()
 
+                # Assert that the primary exchange exists
+                channel.exchange_declare(
+                    exchange=RABBITMQ_EXCHANGE, exchange_type="topic", durable=True
+                )
+
                 # Declare the queue
                 channel.queue_declare(queue=OUTGOING_QUEUE, durable=True)
                 channel.queue_bind(
@@ -445,7 +450,7 @@ def start_outgoing_message_consumer():
             except pika.exceptions.AMQPConnectionError as conn_error:
                 logger.error("Failed to connect to RabbitMQ: %s", conn_error)
             finally:
-                if 'connection' in locals() and connection.is_open:
+                if "connection" in locals() and connection.is_open:
                     connection.close()
 
     Thread(target=consumer_thread, daemon=True).start()
