@@ -5,8 +5,7 @@ HOST_DIR = "/var/wbor-twilio"
 
 default: clean build run logsf
 
-q:
-	clean build run
+q: clean build run
 
 exec:
 	docker exec -it $(CONTAINER_NAME) /bin/bash
