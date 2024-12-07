@@ -18,35 +18,35 @@ The workflows are as follows.
 
 Incoming SMS:
 1. A SMS message is received by Twilio.
-2. Twilio sends the message to this app at the /sms endpoint.
+2. Twilio sends the message to this app at the `/sms` endpoint.
 3. @validate_twilio_request decorator validates the authenticity of the request.
-4. A unique message ID is generated and added to the message data as 'wbor_message_id'.
+4. A unique message ID is generated and added to the message data as `wbor_message_id`.
 5. An acknowledgment event is set in Redis with the message ID.
     - This is used to ensure the message is processed properly downstream by wbor-groupme.
-6. Twilio phone number lookup is used to fetch the name of the sender and add it to the 
-   message data if available.
-    - If the lookup fails, the sender name is set to 'Unknown'.
-7. The message data is published to RabbitMQ with the routing key 'source.twilio.sms.incoming'.
-    - Asserts that `source_exchange` exists
-    - Publishes the message to the exchange with the routing key
-        - Routing key is in the format 'source.<source>.<type>'
-            - e.g. 'source.twilio.sms.incoming' or 'source.twilio.sms.outgoing'
-        - The message type is also included in the message body
-8. The main thread waits for an acknowledgment from the /acknowledge endpoint, indicating 
+    - (Upon receipt from the consumer of successful forwarding to GroupMe, 
+        response is sent to Twilio.)
+6. Twilio phone number lookup is used to fetch the name of the sender and added to the 
+   message data if available as `SenderName`. If the lookup fails, the sender name is set to `Unknown`.
+    - If the lookup fails, the sender name is set to `Unknown`.
+7. The message data is published to RabbitMQ with the routing key `source.twilio.sms.incoming`.
+    - Sent to `source_exchange` (after asserting that it exists)
+    - Routing key is in the format `source.<source>.<type>`
+        - e.g. `source.twilio.sms.incoming` or `source.twilio.sms.outgoing`
+    - The message type is also included in the JSON message body for downstream consumers.
+8. The main thread waits for an acknowledgment from the `/acknowledge` endpoint, indicating 
    successful processing by GroupMe.
     - If the acknowledgment is not received within a timeout, the message is discarded.
     - Subsequently, Twilio will fall back to the secondary handler.
-    - NOTE: /acknowledge requires more than one worker process to work properly.
-    - NOTE: /acknowledge does not validate the source of the acknowledgment, which is a potential 
-      security risk (though unlikely).
+    - NOTE: `/acknowledge` requires more than one worker process to work properly.
+    - NOTE: `/acknowledge` does not validate the SOURCE of the acknowledgment, which is a potential 
+      security risk (though unlikely in our closed network).
 9. Upon receiving the acknowledgment, return an empty TwiML response to Twilio to acknowledge 
    receipt of the message.
 
 Outgoing SMS:
-
 0. Upon launching the app, a consumer thread is started to listen for outgoing SMS messages.
     - The consumer listens for messages with the routing key 'source.twilio.sms.outgoing'.
-1. GET using the /send endpoint in a browser.
+1. A GET request is made using the `/send` endpoint in a browser.
     - Expects a password for authorization set by APP_PASSWORD.
     - Expects `recipient_number` and `message` as query parameters.
 2. Validates the recipient number and message body.
@@ -55,8 +55,8 @@ Outgoing SMS:
     - `message` body must exist.
 3. Generates a unique message ID for tracking, set as `wbor_message_id`.
 4. Prepares the outgoing message data, including a timestamp.
-5. Publishes it to RabbitMQ with the routing key 'source.twilio.sms.outgoing'.
-6. The consumer thread consumes by running process_outgoing_message.
+5. Publishes it to RabbitMQ with the routing key `source.twilio.sms.outgoing`.
+6. The consumer thread consumes by running process_outgoing_message().
 
 Emits keys:
 - `source.twilio.sms.incoming`
@@ -71,12 +71,11 @@ Ideas:
 
 TODO:
 - Log incoming voice intelligence data
-    - Store transcripts?
+    - Store transcripts in PG?
 - Log incoming call events
     - Store audio files?
 """
 
-import os
 import logging
 import json
 import re
@@ -88,77 +87,35 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from uuid import uuid4
 import pika
 import pika.exceptions
-import pytz
-from colorlog import ColoredFormatter
 from flask import Flask, abort, request
 from redis import Redis
 from twilio.rest import Client
 from twilio.request_validator import RequestValidator
 from twilio.base.exceptions import TwilioRestException
 from twilio.twiml.messaging_response import MessagingResponse
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv()
-APP_PORT = os.getenv("APP_PORT", "5000")
-APP_PASSWORD = os.getenv("APP_PASSWORD")
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "wbor-rabbitmq")
-RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
-RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
-REDIS_HOST = os.getenv("REDIS_HOST", "wbor-redis-server")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-REDIS_DB = int(os.getenv("REDIS_DB", "0"))
-REDIS_ACK_EXPIRATION = int(os.getenv("REDIS_ACK_EXPIRATION", "60"))  # in seconds
-
-TWILIO_CHARACTER_LIMIT = 1600  # Twilio SMS character limit
-
-SOURCE = "twilio"  # Define source name for RabbitMQ exchange purposes
-EXCHANGE = "source_exchange"
-OUTGOING_QUEUE = "outgoing_sms"
-SMS_OUTGOING_KEY = "source.twilio.sms.outgoing"
-
-# Logging
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-
-# Define a handler to output to the console
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.DEBUG)
-
-
-class EasternTimeFormatter(ColoredFormatter):
-    """Custom log formatter to display timestamps in Eastern Time with colorized output"""
-
-    def formatTime(self, record, datefmt=None):
-        # Convert UTC to Eastern Time
-        eastern = pytz.timezone("America/New_York")
-        utc_dt = datetime.fromtimestamp(record.created, tz=timezone.utc)
-        eastern_dt = utc_dt.astimezone(eastern)
-        # Use ISO 8601 format
-        return eastern_dt.isoformat()
-
-
-# Define the formatter with color and PID
-formatter = EasternTimeFormatter(
-    "%(log_color)s%(asctime)s - PID %(process)d - %(name)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    log_colors={
-        "DEBUG": "white",
-        "INFO": "green",
-        "WARNING": "yellow",
-        "ERROR": "red",
-        "CRITICAL": "bold_red",
-    },
+from utils.logging import configure_logging
+from config import (
+    APP_PORT,
+    APP_PASSWORD,
+    SOURCE,
+    OUTGOING_QUEUE,
+    SMS_OUTGOING_KEY,
+    TWILIO_ACCOUNT_SID,
+    TWILIO_AUTH_TOKEN,
+    TWILIO_PHONE_NUMBER,
+    TWILIO_CHARACTER_LIMIT,
+    RABBITMQ_HOST,
+    RABBITMQ_USER,
+    RABBITMQ_PASS,
+    RABBITMQ_EXCHANGE,
+    REDIS_HOST,
+    REDIS_PORT,
+    REDIS_DB,
+    REDIS_ACK_EXPIRATION,
 )
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
 
-# Configure werkzeug logging to match
-logging.getLogger("werkzeug").setLevel(logging.INFO)
-logging.getLogger("werkzeug").addHandler(console_handler)
+logging.root.handlers = []
+logger = configure_logging()
 
 redis_client = Redis(
     host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True
@@ -241,14 +198,14 @@ def publish_to_exchange(key, sub_key, data):
 
         # Assert the exchange exists
         channel.exchange_declare(
-            exchange=EXCHANGE,
+            exchange=RABBITMQ_EXCHANGE,
             exchange_type="topic",
             durable=True,
         )
 
         # Publish message to exchange
         channel.basic_publish(
-            exchange=EXCHANGE,
+            exchange=RABBITMQ_EXCHANGE,
             routing_key=f"source.{key}.{sub_key}",
             body=json.dumps(
                 {**data, "type": sub_key}  # Include type in the message body
@@ -262,7 +219,7 @@ def publish_to_exchange(key, sub_key, data):
         )
         logger.info(
             "Published message to `%s` with routing key: `source.%s.%s`. UID: %s",
-            EXCHANGE,
+            RABBITMQ_EXCHANGE,
             key,
             sub_key,
             data.get("wbor_message_id"),
@@ -272,7 +229,7 @@ def publish_to_exchange(key, sub_key, data):
         logger.error(
             "Connection error when publishing to `%s` with routing key "
             "`source.%s.%s`: %s",
-            EXCHANGE,
+            RABBITMQ_EXCHANGE,
             key,
             sub_key,
             conn_error,
@@ -280,7 +237,7 @@ def publish_to_exchange(key, sub_key, data):
     except pika.exceptions.AMQPChannelError as chan_error:
         logger.error(
             "Channel error when publishing to `%s` with routing key `source.%s.%s`: %s",
-            EXCHANGE,
+            RABBITMQ_EXCHANGE,
             key,
             sub_key,
             chan_error,
@@ -470,7 +427,7 @@ def start_outgoing_message_consumer():
                 channel.queue_declare(queue=OUTGOING_QUEUE, durable=True)
                 channel.queue_bind(
                     queue=OUTGOING_QUEUE,
-                    exchange=EXCHANGE,
+                    exchange=RABBITMQ_EXCHANGE,
                     routing_key=SMS_OUTGOING_KEY,  # Only bind to this key
                 )
 
