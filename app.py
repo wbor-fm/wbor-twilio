@@ -83,7 +83,6 @@ import logging
 import json
 import re
 import sys
-import time
 import os
 import signal
 from threading import Thread
@@ -132,9 +131,10 @@ twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 twilio_client.http_client.logger.setLevel(logging.INFO)
 
 
-def terminate_process():
-    """Terminate the process and propagate termination."""
-    os.kill(os.getpid(), signal.SIGTERM)
+def terminate(exit_code=1):
+    """Terminate the process."""
+    os.kill(os.getppid(), signal.SIGTERM)  # Gunicorn master
+    os._exit(exit_code)  # Current thread
 
 
 # RabbitMQ
@@ -210,7 +210,7 @@ def publish_to_exchange(key, sub_key, data):
             logger.critical(
                 "Access refused. Check RabbitMQ user permissions. Shutting down consumer."
             )
-        terminate_process()
+        terminate()
     except AMQPChannelError as chan_error:
         logger.error(
             "Channel error when publishing to `%s` with routing key `source.%s.%s`: %s",
@@ -418,7 +418,7 @@ def start_outgoing_message_consumer():
                             "Queue already exists with mismatched attributes. "
                             "Please resolve this conflict before restarting the application."
                         )
-                        terminate_process()
+                        terminate()
 
                 # Ensure one message is processed at a time
                 channel.basic_qos(prefetch_count=1)
@@ -434,20 +434,19 @@ def start_outgoing_message_consumer():
             except AMQPConnectionError as conn_error:
                 error_message = str(conn_error)
                 logger.error(
-                    "(Retrying in 5 seconds) Failed to connect to RabbitMQ: %s",
+                    "Failed to connect to RabbitMQ: %s",
                     error_message,
                 )
                 if "CONNECTION_FORCED" in error_message and "shutdown" in error_message:
                     logger.critical(
-                        "Broker shut down the connection. Shutting down consumer."
+                        "Broker shut down the connection. Shutting down consumer..."
                     )
                     sys.exit(1)
                 if "ACCESS_REFUSED" in error_message:
                     logger.critical(
-                        "Access refused. Check RabbitMQ user permissions. Shutting down consumer."
+                        "Access refused. Check RabbitMQ user permissions. Shutting down process..."
                     )
-                    terminate_process()
-                time.sleep(5)
+                    terminate()
             finally:
                 if "connection" in locals() and connection.is_open:
                     connection.close()
