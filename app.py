@@ -448,7 +448,7 @@ def groupme_acknowledge():
     return "Unknown wbor_message_id", 404
 
 
-@app.route("/sms", methods=["GET", "POST"])
+@app.route("/sms", methods=["POST"])
 @validate_twilio_request
 def receive_sms():
     """
