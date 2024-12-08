@@ -3,7 +3,6 @@ Redis utilities.
 """
 
 from redis import Redis
-from app import redis_client
 from config import REDIS_ACK_EXPIRATION, REDIS_DB, REDIS_HOST, REDIS_PORT
 from utils.logging import configure_logging
 
