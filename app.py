@@ -83,6 +83,7 @@ import logging
 import json
 import re
 import sys
+import time
 from threading import Thread
 from functools import wraps
 from datetime import datetime, timezone
@@ -182,14 +183,24 @@ def publish_to_exchange(key, sub_key, data):
         )
         connection.close()
     except pika.exceptions.AMQPConnectionError as conn_error:
+        error_message = str(conn_error)
         logger.error(
             "Connection error when publishing to `%s` with routing key "
             "`source.%s.%s`: %s",
             RABBITMQ_EXCHANGE,
             key,
             sub_key,
-            conn_error,
+            error_message,
         )
+        if "CONNECTION_FORCED" in error_message and "shutdown" in error_message:
+            logger.critical("Broker shut down the connection. Shutting down consumer.")
+            sys.exit(1)  # Exit the process to avoid infinite retries
+        if "ACCESS_REFUSED" in error_message:
+            logger.critical(
+                "Access refused. Check RabbitMQ user permissions. Shutting down consumer."
+            )
+            sys.exit(1)
+        time.sleep(5)
     except pika.exceptions.AMQPChannelError as chan_error:
         logger.error(
             "Channel error when publishing to `%s` with routing key `source.%s.%s`: %s",
