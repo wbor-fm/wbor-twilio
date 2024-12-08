@@ -220,6 +220,7 @@ def publish_to_exchange(key, sub_key, data):
                 delivery_mode=2,  # Persistent message - write to disk for safety
             ),
         )
+        logger.debug("Message body: %s", json.dumps({**data, "type": sub_key}))
         logger.info(
             "Published message to `%s` with routing key: `source.%s.%s`. UID: %s",
             RABBITMQ_EXCHANGE,
@@ -534,8 +535,10 @@ def receive_sms():
         logger.error("Error fetching sender name: %s", str(e))
         sender_name = "Unknown"
     sms_data["SenderName"] = sender_name
+    sms_data["source"] = SOURCE
 
-    # `sms_data` now includes original Twilio content, `SenderName`, and `wbor_message_id`
+    # `sms_data` now includes original Twilio content, `SenderName`, `source`, and `wbor_message_id`
+    logger.debug("SMS data pre-publish: %s", sms_data)
     Thread(target=publish_to_exchange, args=(SOURCE, "sms.incoming", sms_data)).start()
 
     logger.debug("Waiting for acknowledgment for message_id: %s", message_id)
