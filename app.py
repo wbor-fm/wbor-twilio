@@ -141,7 +141,7 @@ def set_ack_event(message_id):
     - message_id (str): The unique message ID to set an acknowledgment event for.
     """
     redis_client.set(message_id, "pending", ex=REDIS_ACK_EXPIRATION)
-    logger.debug("Set ack event for: %s", message_id)
+    logger.debug("Set ack event: %s", message_id)
 
 
 def get_ack_event(message_id):
@@ -155,7 +155,7 @@ def get_ack_event(message_id):
     - str: The status of the acknowledgment event (e.g. 'pending', 'acknowledged', None
     """
     ack_event = redis_client.get(message_id)
-    logger.debug("Retrieved ack event for: %s", message_id)
+    logger.debug("Retrieved ack event: %s", message_id)
     return ack_event
 
 
@@ -168,7 +168,7 @@ def delete_ack_event(message_id):
     """
     if redis_client.exists(message_id):
         redis_client.delete(message_id)
-        logger.debug("Deleted ack event for: %s", message_id)
+        logger.debug("Deleted ack event: %s", message_id)
     else:
         logger.warning(
             "Attempted to delete non-existent ack event for message_id: %s", message_id
@@ -220,7 +220,9 @@ def publish_to_exchange(key, sub_key, data):
                 delivery_mode=2,  # Persistent message - write to disk for safety
             ),
         )
-        logger.debug("Message body: %s", json.dumps({**data, "type": sub_key}))
+        logger.debug(
+            "Publishing message body: %s", json.dumps({**data, "type": sub_key})
+        )
         logger.info(
             "Published message to `%s` with routing key: `source.%s.%s`. UID: %s",
             RABBITMQ_EXCHANGE,
@@ -538,7 +540,6 @@ def receive_sms():
     sms_data["source"] = SOURCE
 
     # `sms_data` now includes original Twilio content, `SenderName`, `source`, and `wbor_message_id`
-    logger.debug("SMS data pre-publish: %s", sms_data)
     Thread(target=publish_to_exchange, args=(SOURCE, "sms.incoming", sms_data)).start()
 
     logger.debug("Waiting for acknowledgment for message_id: %s", message_id)
