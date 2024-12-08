@@ -75,6 +75,8 @@ TODO:
     - Store transcripts in PG?
 - Log incoming call events
     - Store audio files?
+- Log sent SMS messages
+    - Possibly use SID instead of UUID?
 """
 
 import logging
@@ -97,6 +99,7 @@ from twilio.request_validator import RequestValidator
 from twilio.base.exceptions import TwilioRestException
 from twilio.twiml.messaging_response import MessagingResponse
 from utils.logging import configure_logging
+from utils.redis import set_ack_event, get_ack_event, delete_ack_event
 from config import (
     APP_PORT,
     APP_PASSWORD,
@@ -128,51 +131,6 @@ app = Flask(__name__)
 
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 twilio_client.http_client.logger.setLevel(logging.INFO)
-
-
-# Redis
-
-
-def set_ack_event(message_id):
-    """
-    Set an acknowledgment event in Redis with an expiration time.
-
-    Parameters:
-    - message_id (str): The unique message ID to set an acknowledgment event for.
-    """
-    redis_client.set(message_id, "pending", ex=REDIS_ACK_EXPIRATION)
-    logger.debug("Set ack event: %s", message_id)
-
-
-def get_ack_event(message_id):
-    """
-    Get the acknowledgment status for a message ID.
-
-    Parameters:
-    - message_id (str): The unique message ID to check for acknowledgment.
-
-    Returns:
-    - str: The status of the acknowledgment event (e.g. 'pending', 'acknowledged', None
-    """
-    ack_event = redis_client.get(message_id)
-    logger.debug("Retrieved ack event: %s", message_id)
-    return ack_event
-
-
-def delete_ack_event(message_id):
-    """
-    Delete an acknowledgment event from Redis. Used after the message has been processed.
-
-    Parameters:
-    - message_id (str): The unique message ID to delete the acknowledgment
-    """
-    if redis_client.exists(message_id):
-        redis_client.delete(message_id)
-        logger.debug("Deleted ack event: %s", message_id)
-    else:
-        logger.warning(
-            "Attempted to delete non-existent ack event for message_id: %s", message_id
-        )
 
 
 # RabbitMQ
@@ -365,8 +323,6 @@ def send_sms(recipient_number, message_body):
             from_=TWILIO_PHONE_NUMBER,
             body=message_body,
         )
-
-        # TODO Log the message to Postgres here - possibly use SID instead of UUID?
         return message.sid
     except TwilioRestException as e:
         logger.error("Failed to send SMS to %s: %s", recipient_number, str(e))
@@ -604,9 +560,6 @@ def browser_queue_outgoing_sms():
     return f"Message queued for sending to {recipient_number}"
 
 
-# Future functionality
-
-
 @app.route("/voice-intelligence", methods=["POST"])
 def log_webhook():
     """
@@ -640,9 +593,6 @@ def log_call_event():
 def hello_world():
     """Serve a simple static Hello World page at the root"""
     return "<h1>wbor-twilio is online!</h1>"
-
-
-# Main
 
 
 if __name__ == "__main__":
