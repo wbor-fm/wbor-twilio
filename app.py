@@ -93,7 +93,12 @@ from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from uuid import uuid4
 import pika
-import pika.exceptions
+from pika.exceptions import (
+    AMQPError,
+    AMQPConnectionError,
+    AMQPChannelError,
+    ChannelClosedByBroker,
+)
 from flask import Flask, abort, request
 from twilio.rest import Client
 from twilio.request_validator import RequestValidator
@@ -188,7 +193,7 @@ def publish_to_exchange(key, sub_key, data):
             data.get("wbor_message_id"),
         )
         connection.close()
-    except pika.exceptions.AMQPConnectionError as conn_error:
+    except AMQPConnectionError as conn_error:
         error_message = str(conn_error)
         logger.error(
             "Connection error when publishing to `%s` with routing key "
@@ -206,7 +211,7 @@ def publish_to_exchange(key, sub_key, data):
                 "Access refused. Check RabbitMQ user permissions. Shutting down consumer."
             )
         terminate_process()
-    except pika.exceptions.AMQPChannelError as chan_error:
+    except AMQPChannelError as chan_error:
         logger.error(
             "Channel error when publishing to `%s` with routing key `source.%s.%s`: %s",
             RABBITMQ_EXCHANGE,
@@ -371,7 +376,7 @@ def start_outgoing_message_consumer():
                 logger.info("Message sent successfully. SID: %s", msg_sid)
                 channel.basic_ack(delivery_tag=method.delivery_tag)
 
-        except (pika.exceptions.AMQPError, json.JSONDecodeError) as e:
+        except (AMQPError, json.JSONDecodeError) as e:
             logger.error("Failed to process message: %s", str(e))
             channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
         except ValueError as ve:
@@ -398,13 +403,22 @@ def start_outgoing_message_consumer():
                     exchange=RABBITMQ_EXCHANGE, exchange_type="topic", durable=True
                 )
 
-                # Declare the queue
-                channel.queue_declare(queue=OUTGOING_QUEUE, durable=True)
-                channel.queue_bind(
-                    queue=OUTGOING_QUEUE,
-                    exchange=RABBITMQ_EXCHANGE,
-                    routing_key=SMS_OUTGOING_KEY,  # Only bind to this key
-                )
+                try:
+                    # Declare the queue
+                    channel.queue_declare(queue=OUTGOING_QUEUE, durable=True)
+                    channel.queue_bind(
+                        queue=OUTGOING_QUEUE,
+                        exchange=RABBITMQ_EXCHANGE,
+                        routing_key=SMS_OUTGOING_KEY,  # Only bind to this key
+                    )
+                except ChannelClosedByBroker as e:
+                    if "inequivalent arg" in str(e):
+                        # If the queue already exists with different attributes, log and terminate
+                        logger.warning(
+                            "Queue already exists with mismatched attributes. "
+                            "Please resolve this conflict before restarting the application."
+                        )
+                        terminate_process()
 
                 # Ensure one message is processed at a time
                 channel.basic_qos(prefetch_count=1)
@@ -417,7 +431,7 @@ def start_outgoing_message_consumer():
                     "Outgoing message consumer is ready. Waiting for messages..."
                 )
                 channel.start_consuming()
-            except pika.exceptions.AMQPConnectionError as conn_error:
+            except AMQPConnectionError as conn_error:
                 error_message = str(conn_error)
                 logger.error(
                     "(Retrying in 5 seconds) Failed to connect to RabbitMQ: %s",
@@ -427,7 +441,12 @@ def start_outgoing_message_consumer():
                     logger.critical(
                         "Broker shut down the connection. Shutting down consumer."
                     )
-                    sys.exit(1) 
+                    sys.exit(1)
+                if "ACCESS_REFUSED" in error_message:
+                    logger.critical(
+                        "Access refused. Check RabbitMQ user permissions. Shutting down consumer."
+                    )
+                    terminate_process()
                 time.sleep(5)
             finally:
                 if "connection" in locals() and connection.is_open:
