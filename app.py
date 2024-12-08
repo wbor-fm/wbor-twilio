@@ -535,6 +535,7 @@ def receive_sms():
         sender_name = "Unknown"
     sms_data["SenderName"] = sender_name
 
+    # `sms_data` now includes original Twilio content, `SenderName`, and `wbor_message_id`
     Thread(target=publish_to_exchange, args=(SOURCE, "sms.incoming", sms_data)).start()
 
     logger.debug("Waiting for acknowledgment for message_id: %s", message_id)
