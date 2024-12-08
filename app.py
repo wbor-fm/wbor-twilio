@@ -84,10 +84,11 @@ import json
 import re
 import sys
 import time
+import os
+import signal
 from threading import Thread
 from functools import wraps
 from datetime import datetime, timezone
-import time
 from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from uuid import uuid4
@@ -124,6 +125,11 @@ app = Flask(__name__)
 
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 twilio_client.http_client.logger.setLevel(logging.INFO)
+
+
+def terminate_process():
+    """Terminate the process and propagate termination."""
+    os.kill(os.getpid(), signal.SIGTERM)
 
 
 # RabbitMQ
@@ -194,13 +200,12 @@ def publish_to_exchange(key, sub_key, data):
         )
         if "CONNECTION_FORCED" in error_message and "shutdown" in error_message:
             logger.critical("Broker shut down the connection. Shutting down consumer.")
-            sys.exit(1)  # Exit the process to avoid infinite retries
+            sys.exit(1)
         if "ACCESS_REFUSED" in error_message:
             logger.critical(
                 "Access refused. Check RabbitMQ user permissions. Shutting down consumer."
             )
-            sys.exit(1)
-        time.sleep(5)
+        terminate_process()
     except pika.exceptions.AMQPChannelError as chan_error:
         logger.error(
             "Channel error when publishing to `%s` with routing key `source.%s.%s`: %s",
@@ -422,7 +427,7 @@ def start_outgoing_message_consumer():
                     logger.critical(
                         "Broker shut down the connection. Shutting down consumer."
                     )
-                    sys.exit(1)  # Exit the process to avoid infinite retries
+                    sys.exit(1) 
                 time.sleep(5)
             finally:
                 if "connection" in locals() and connection.is_open:
