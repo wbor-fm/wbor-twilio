@@ -2,11 +2,17 @@
 Redis utilities.
 """
 
+from redis import Redis
 from app import redis_client
-from config import REDIS_ACK_EXPIRATION
+from config import REDIS_ACK_EXPIRATION, REDIS_DB, REDIS_HOST, REDIS_PORT
 from utils.logging import configure_logging
 
 logger = configure_logging(__name__)
+
+# Initialize Redis client
+redis_client = Redis(
+    host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True
+)
 
 
 def set_ack_event(message_id):

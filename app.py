@@ -93,13 +93,12 @@ from uuid import uuid4
 import pika
 import pika.exceptions
 from flask import Flask, abort, request
-from redis import Redis
 from twilio.rest import Client
 from twilio.request_validator import RequestValidator
 from twilio.base.exceptions import TwilioRestException
 from twilio.twiml.messaging_response import MessagingResponse
 from utils.logging import configure_logging
-from utils.redis import set_ack_event, get_ack_event, delete_ack_event
+from utils.redis import redis_client, set_ack_event, get_ack_event, delete_ack_event
 from config import (
     APP_PORT,
     APP_PASSWORD,
@@ -114,18 +113,11 @@ from config import (
     RABBITMQ_USER,
     RABBITMQ_PASS,
     RABBITMQ_EXCHANGE,
-    REDIS_HOST,
-    REDIS_PORT,
-    REDIS_DB,
     REDIS_ACK_EXPIRATION,
 )
 
 logging.root.handlers = []
 logger = configure_logging()
-
-redis_client = Redis(
-    host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True
-)
 
 app = Flask(__name__)
 
