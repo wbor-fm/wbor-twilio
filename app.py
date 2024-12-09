@@ -77,6 +77,7 @@ TODO:
     - Store audio files?
 - Log sent SMS messages
     - Possibly use SID instead of UUID?
+    - Or both
 """
 
 import logging
@@ -332,7 +333,7 @@ def send_sms(recipient_number, message_body):
         )
 
     try:
-        logger.info("Attempting to send SMS to %s", recipient_number)
+        logger.debug("Attempting to send SMS to %s", recipient_number)
         message = twilio_client.messages.create(
             to=recipient_number,
             from_=TWILIO_PHONE_NUMBER,
@@ -375,8 +376,13 @@ def start_outgoing_message_consumer():
             # Attempt to send the SMS
             msg_sid = send_sms(recipient_number, sms_body)
             if msg_sid:
-                logger.info("Message sent successfully. SID: %s", msg_sid)
+                logger.info(
+                    "Message sent successfully. SID: %s, UID: %s",
+                    msg_sid,
+                    message.get("wbor_message_id"),
+                )
                 channel.basic_ack(delivery_tag=method.delivery_tag)
+                # TODO: log the sent message to PG
 
         except (AMQPError, json.JSONDecodeError) as e:
             logger.error("Failed to process message: %s", str(e))
@@ -559,13 +565,18 @@ def browser_queue_outgoing_sms():
     # Don't let strangers send messages as if they were us!
     password = request.args.get("password")
     if password != APP_PASSWORD:
-        logger.warning("Unauthorized access attempt from IP: %s", request.remote_addr)
+        # TODO: fix this to log the IP address from outside the container
+        # logger.warning("Unauthorized access attempt from IP: %s", request.remote_addr)
+        logger.warning("Unauthorized access attempt")
         abort(403, "Unauthorized access")
 
     recipient_number = request.args.get("recipient_number", "").replace(" ", "+")
     message = request.args.get("message")
 
     if not recipient_number or not re.fullmatch(r"^\+?\d{10,15}$", recipient_number):
+        if not recipient_number:
+            logger.warning("Recipient number missing")
+            abort(400, "Recipient missing")
         logger.warning("Invalid recipient number format: %s", recipient_number)
         abort(400, "Invalid recipient number format (must use the E.164 standard)")
     if not message:
