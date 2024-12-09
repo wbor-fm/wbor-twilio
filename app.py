@@ -67,9 +67,6 @@ Emits keys:
 - `source.twilio.voice-intelligence`
 - `source.twilio.call-events`
 
-Ideas:
-- Use Twilio SID instead of UUID?
-
 TODO:
 - Log incoming voice intelligence data
     - Store transcripts in PG?
@@ -414,10 +411,17 @@ def start_outgoing_message_consumer():
                 try:
                     # Declare the queue
                     channel.queue_declare(queue=OUTGOING_QUEUE, durable=True)
+                    logger.debug("Queue declared: %s", OUTGOING_QUEUE)
                     channel.queue_bind(
                         queue=OUTGOING_QUEUE,
                         exchange=RABBITMQ_EXCHANGE,
                         routing_key=SMS_OUTGOING_KEY,  # Only bind to this key
+                    )
+                    logger.debug(
+                        "Queue `%s` bound to `%s` with routing key %s",
+                        OUTGOING_QUEUE,
+                        RABBITMQ_EXCHANGE,
+                        SMS_OUTGOING_KEY,
                     )
                 except ChannelClosedByBroker as e:
                     if "inequivalent arg" in str(e):
