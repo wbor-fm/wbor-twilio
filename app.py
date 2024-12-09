@@ -183,13 +183,15 @@ def publish_to_exchange(key, sub_key, data):
         logger.debug(
             "Publishing message body: %s", json.dumps({**data, "type": sub_key})
         )
+        # Handle difference between Twilio incoming and outgoing (custom) messages
+        message_body_content = data.get("Body") or data.get("message")
         logger.info(
             "Published message to `%s` with routing key: `source.%s.%s`: %s - %s - UID: %s",
             RABBITMQ_EXCHANGE,
             key,
             sub_key,
             data.get("SenderName", "Unknown"),
-            data.get("Body", "No message body"),
+            message_body_content,
             data.get("wbor_message_id"),
         )
         connection.close()
@@ -374,9 +376,9 @@ def start_outgoing_message_consumer():
             msg_sid = send_sms(recipient_number, sms_body)
             if msg_sid:
                 logger.info(
-                    "Message sent successfully. SID: %s, UID: %s",
-                    msg_sid,
+                    "Message sent successfully. UID: %s, SID: %s",
                     message.get("wbor_message_id"),
+                    msg_sid,
                 )
                 channel.basic_ack(delivery_tag=method.delivery_tag)
                 # TODO: log the sent message to PG
@@ -599,7 +601,7 @@ def browser_queue_outgoing_sms():
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     publish_to_exchange(SOURCE, "sms.outgoing", outgoing_message)
-    logger.info("Message queued for sending. Message ID: %s", message_id)
+    logger.info("Message queued for sending. UID: %s", message_id)
     return f"Message queued for sending to {recipient_number}"
 
 
