@@ -159,7 +159,7 @@ def publish_to_exchange(key, sub_key, data):
         )
         connection = pika.BlockingConnection(parameters)
         channel = connection.channel()
-        logger.info("RabbitMQ connected!")
+        logger.debug("RabbitMQ connected!")
 
         # Assert the exchange exists
         channel.exchange_declare(
@@ -186,10 +186,12 @@ def publish_to_exchange(key, sub_key, data):
             "Publishing message body: %s", json.dumps({**data, "type": sub_key})
         )
         logger.info(
-            "Published message to `%s` with routing key: `source.%s.%s`. UID: %s",
+            "Published message to `%s` with routing key: `source.%s.%s`: %s - %s - UID: %s",
             RABBITMQ_EXCHANGE,
             key,
             sub_key,
+            data.get("SenderName", "Unknown"),
+            data.get("Body", "No message body"),
             data.get("wbor_message_id"),
         )
         connection.close()
@@ -536,7 +538,7 @@ def receive_sms():
         if not ack_status:  # ACK received (deleted by /acknowledge endpoint)
             # So if it's not found, the message was processed
             # Return an empty TwiML response to acknowledge receipt of the message
-            logger.info("Acknowledgment received: %s", message_id)
+            logger.debug("Acknowledgment received: %s", message_id)
             return str(resp)
     logger.error(
         "Timeout met while waiting for acknowledgment for message_id: %s", message_id
