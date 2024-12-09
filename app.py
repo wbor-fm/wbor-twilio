@@ -66,15 +66,6 @@ Emits keys:
     - Local queue for sending outgoing SMS messages.
 - `source.twilio.voice-intelligence`
 - `source.twilio.call-events`
-
-TODO:
-- Log incoming voice intelligence data
-    - Store transcripts in PG?
-- Log incoming call events
-    - Store audio files?
-- Log sent SMS messages
-    - Possibly use SID instead of UUID?
-    - Or both
 """
 
 import logging
@@ -186,7 +177,7 @@ def publish_to_exchange(key, sub_key, data):
         # Handle difference between Twilio incoming and outgoing (custom) messages
         message_body_content = data.get("Body") or data.get("message")
         logger.info(
-            "Published message to `%s` with routing key: `source.%s.%s`: %s - %s - UID: %s",
+            "Published message to `%s` with routing key: `source.%s.%s`: Sender: %s - %s - UID: %s",
             RABBITMQ_EXCHANGE,
             key,
             sub_key,
@@ -618,6 +609,7 @@ def log_webhook():
     data = request.get_json()
     logger.info("Received Voice Intelligence webhook fire with data: %s", data)
     logger.info("Transcript SID: %s", data.get("transcript_sid"))
+    publish_to_exchange(SOURCE, "voice-intelligence", data)
     return "Accepted", 202
 
 
@@ -631,6 +623,7 @@ def log_call_event():
     """
     data = request.form.to_dict()
     logger.info("Received Call Event webhook fire with data: %s", data)
+    publish_to_exchange(SOURCE, "call-events", data)
     return "Accepted", 202
 
 
