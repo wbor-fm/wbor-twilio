@@ -1,5 +1,5 @@
 """
-Handle Gunicorn worker post-fork initialization.
+App launch configuration for Gunicorn.
 """
 
 import threading
