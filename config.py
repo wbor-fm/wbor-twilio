@@ -22,7 +22,6 @@ RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
 RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
 RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
 RABBITMQ_EXCHANGE = os.getenv("RABBITMQ_EXCHANGE", "source_exchange")
-RABBITMQ_DL_EXCHANGE = os.getenv("RABBITMQ_DL_EXCHANGE", "dead_letter_exchange")
 
 REDIS_HOST = os.getenv("REDIS_HOST", "wbor-redis-server")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))

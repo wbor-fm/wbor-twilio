@@ -131,7 +131,7 @@ def terminate(exit_code=1):
 
 def publish_to_exchange(key, sub_key, data):
     """
-    Publishes a message to a RabbitMQ queue.
+    Publishes a message to a RabbitMQ exchange.
 
     Parameters:
     - key (str): The name of the message key.
@@ -144,7 +144,7 @@ def publish_to_exchange(key, sub_key, data):
         parameters = pika.ConnectionParameters(
             host=RABBITMQ_HOST,
             credentials=credentials,
-            client_properties={"connection_name": "TwilioConsumerConnection"},
+            client_properties={"connection_name": "TwilioConnection"},
         )
         connection = pika.BlockingConnection(parameters)
         channel = connection.channel()
@@ -175,7 +175,7 @@ def publish_to_exchange(key, sub_key, data):
             "Publishing message body: %s", json.dumps({**data, "type": sub_key})
         )
         # Handle difference between Twilio incoming and outgoing (custom) messages
-        message_body_content = data.get("Body") or data.get("message")
+        message_body_content = data.get("Body") or data.get("body")
         logger.info(
             "Published message to `%s` with routing key: `source.%s.%s`: Sender: %s - %s - UID: %s",
             RABBITMQ_EXCHANGE,
@@ -357,7 +357,7 @@ def start_outgoing_message_consumer():
         try:
             message = json.loads(body)
             recipient_number = message.get("recipient_number")
-            sms_body = message.get("message")
+            sms_body = message.get("body")
             if not recipient_number or not sms_body:
                 logger.warning("Invalid message format: %s", message)
                 channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
@@ -568,7 +568,7 @@ def browser_queue_outgoing_sms():
         abort(403, "Unauthorized access")
 
     recipient_number = request.args.get("recipient_number", "").replace(" ", "+")
-    message = request.args.get("message")
+    message = request.args.get("body")
 
     if not recipient_number or not re.fullmatch(r"^\+?\d{10,15}$", recipient_number):
         if not recipient_number:
@@ -588,7 +588,7 @@ def browser_queue_outgoing_sms():
     outgoing_message = {
         "wbor_message_id": message_id,
         "recipient_number": recipient_number,
-        "message": message,
+        "body": message,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     publish_to_exchange(SOURCE, "sms.outgoing", outgoing_message)
