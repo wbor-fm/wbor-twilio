@@ -574,6 +574,13 @@ def browser_queue_outgoing_sms():
         if not recipient_number:
             logger.warning("Recipient number missing")
             abort(400, "Recipient missing")
+
+        if not recipient_number.startswith("+1"):
+            logger.warning(
+                "Invalid recipient number format (recipient number must start with +1): %s",
+                recipient_number,
+            )
+            abort(400, "Recipient number must start with +1")
         logger.warning("Invalid recipient number format: %s", recipient_number)
         abort(400, "Invalid recipient number format (must use the E.164 standard)")
     if not message:
