@@ -49,11 +49,11 @@ Outgoing SMS:
     - The consumer listens for messages with the routing key 'source.twilio.sms.outgoing'.
 1. A GET request is made using the `/send` endpoint in a browser.
     - Expects a password for authorization set by APP_PASSWORD.
-    - Expects `recipient_number` and `message` as query parameters.
+    - Expects `recipient_number` and `body` as query parameters.
 2. Validates the recipient number and message body.
     - `recipient_number` must be in E.164 format.
-    - `message` must not exceed the Twilio character limit.
-    - `message` body must exist.
+    - `body` must not exceed the Twilio character limit.
+    - `body` body must exist.
 3. Generates a unique message ID for tracking, set as `wbor_message_id`.
 4. Prepares the outgoing message data, including a timestamp.
 5. Publishes it to RabbitMQ with the routing key `source.twilio.sms.outgoing`.
@@ -66,6 +66,8 @@ Emits keys:
     - Local queue for sending outgoing SMS messages.
 - `source.twilio.voice-intelligence`
 - `source.twilio.call-events`
+
+TODO: fix not shutting down when MQ connection breaks?
 """
 
 import logging
@@ -554,6 +556,12 @@ def receive_sms():
 def browser_queue_outgoing_sms():
     """
     Send an SMS message using the Twilio API from a browser address bar. Requires a password.
+
+    Parameters:
+    - recipient_number (str): The phone number to send the message to.
+    - body (str): The body of the SMS message.
+
+    Does not accept international numbers (e.g. +44).
 
     Expects recipient_number to be in E.164 format, e.g. +12077253250.
     Encoding the `+` as %2B also works.
