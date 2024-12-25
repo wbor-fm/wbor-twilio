@@ -530,10 +530,13 @@ def receive_sms():
 
     # `sms_data` now includes original Twilio content, `SenderName`, `source`, and `wbor_message_id`
     Thread(target=publish_to_exchange, args=(SOURCE, "sms.incoming", sms_data)).start()
+    # TODO: if the sender is banned, append `.banned` to the routing key, that way downstream
+    # consumers can subscribe to only non-banned messages if desired (e.g. wbor-studio-dashboard)
 
-    logger.debug("Waiting for acknowledgment for message_id: %s", message_id)
     # Wait for acknowledgment from the GroupMe consumer so that fallback handler can be
     # triggered if the message fails to process for any reason
+    logger.debug("Waiting for acknowledgment for message_id: %s", message_id)
+    # TODO: don't use Redis, but instead RabbitMQ's built-in features for this
 
     # Note: this requires more than one worker process to work properly
     # (since the main thread is blocked waiting for the /acknowledgment)
@@ -560,10 +563,11 @@ def browser_queue_outgoing_sms():
     Parameters:
     - recipient_number (str): The phone number to send the message to.
     - body (str): The body of the SMS message.
+    - password (str): The password for authorization.
 
     Does not accept international numbers (e.g. +44).
 
-    Expects recipient_number to be in E.164 format, e.g. +12077253250.
+    Expects `recipient_number` to be in E.164 format, e.g. +12077253250.
     Encoding the `+` as %2B also works.
     """
     logger.info("Received request to send SMS from browser...")
@@ -609,6 +613,110 @@ def browser_queue_outgoing_sms():
     publish_to_exchange(SOURCE, "sms.outgoing", outgoing_message)
     logger.info("Message queued for sending. UID: %s", message_id)
     return f"Message queued for sending to {recipient_number}"
+
+
+@app.route("/ban", methods=["GET"])
+def browser_ban_contact():
+    """
+    Ban a phone number from all future communication.
+
+    Parameters:
+    - number (str): The phone number to ban.
+    - password (str): The password for authorization.
+
+    Does not accept international numbers (e.g. +44).
+
+    Expects `number` to be in E.164 format, e.g. +12077253250.
+    Encoding the `+` as %2B also works.
+    """
+    logger.info("Received request to ban a number from browser...")
+    # Don't let strangers ban as if they were us!
+    password = request.args.get("password")
+    if password != APP_PASSWORD:
+        # TODO: fix this to log the IP address from outside the container
+        # logger.warning("Unauthorized access attempt from IP: %s", request.remote_addr)
+        logger.warning("Unauthorized access attempt")
+        abort(403, "Unauthorized access")
+
+    ban_number = request.args.get("number", "").replace(" ", "+")
+    message = request.args.get("body")
+
+    if not ban_number or not re.fullmatch(r"^\+?\d{10,15}$", ban_number):
+        if not ban_number:
+            logger.warning("Ban number missing")
+            abort(400, "Ban number missing")
+
+        if not ban_number.startswith("+1"):
+            logger.warning(
+                "Invalid ban number format (ban number must start with +1): %s",
+                ban_number,
+            )
+            abort(400, "Ban number must start with +1")
+        logger.warning("Invalid ban number format: %s", ban_number)
+        abort(400, "Invalid ban number format (must use the E.164 standard)")
+
+    # Queue the message for sending
+    message_id = str(uuid4())  # Generate a unique ID for tracking
+    body = {
+        "wbor_message_id": message_id,
+        "ban_number": ban_number,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    publish_to_exchange(SOURCE, "ban", body)
+    logger.info("Message queued for sending. UID: %s", message_id)
+    return f"Ban queued for {ban_number}"
+
+
+@app.route("/unban", methods=["GET"])
+def browser_unban_contact():
+    """
+    Remove a phone number from the ban list.
+
+    Parameters:
+    - number (str): The phone number to unban.
+    - password (str): The password for authorization.
+
+    Does not accept international numbers (e.g. +44).
+
+    Expects `number` to be in E.164 format, e.g. +12077253250.
+    Encoding the `+` as %2B also works.
+    """
+    logger.info("Received request to unban a number from browser...")
+    # Don't let strangers ban as if they were us!
+    password = request.args.get("password")
+    if password != APP_PASSWORD:
+        # TODO: fix this to log the IP address from outside the container
+        # logger.warning("Unauthorized access attempt from IP: %s", request.remote_addr)
+        logger.warning("Unauthorized access attempt")
+        abort(403, "Unauthorized access")
+
+    unban_number = request.args.get("number", "").replace(" ", "+")
+    message = request.args.get("body")
+
+    if not unban_number or not re.fullmatch(r"^\+?\d{10,15}$", unban_number):
+        if not unban_number:
+            logger.warning("Unbn number missing")
+            abort(400, "Unban number missing")
+
+        if not unban_number.startswith("+1"):
+            logger.warning(
+                "Invalid unban number format (unban number must start with +1): %s",
+                unban_number,
+            )
+            abort(400, "Unban number must start with +1")
+        logger.warning("Invalid unban number format: %s", unban_number)
+        abort(400, "Invalid unban number format (must use the E.164 standard)")
+
+    # Queue the message for sending
+    message_id = str(uuid4())  # Generate a unique ID for tracking
+    body = {
+        "wbor_message_id": message_id,
+        "unban_number": unban_number,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    publish_to_exchange(SOURCE, "unban", body)
+    logger.info("Message queued for sending. UID: %s", message_id)
+    return f"Unban queued for {unban_number}"
 
 
 @app.route("/voice-intelligence", methods=["POST"])
