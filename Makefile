@@ -17,6 +17,8 @@ build:
 	@echo "Building..."
 	nice -n 10 docker buildx build -q -t $(IMAGE_NAME) .
 
+start: run
+
 run: stop
 	docker run -d --network $(NETWORK_NAME) --name $(CONTAINER_NAME) -v ${HOST_DIR}/logs:/app/logs $(IMAGE_NAME)
 
