@@ -517,22 +517,32 @@ def check_media(sms_data):
     if not any(media_urls):
         return False
 
-    supported_mime_types = {"image/jpeg", "image/png"}
+    supported_mime_types = {"image/jpeg", "image/png", "image/gif"}
     contains_invalid_media = False
 
     for url in media_urls:
         try:
-            # Fetch the content type from the media URL
-            response = requests.head(url, timeout=10)
-            content_type = response.headers.get("Content-Type", "")
-            logger.debug("Media URL: %s, Content-Type: %s", url, content_type)
-            if content_type not in supported_mime_types:
+            # Download the file and check the MIME type
+            response = requests.get(url, timeout=10, allow_redirects=True)
+            if response.status_code == 200:
+                content_type = response.headers.get("Content-Type", "")
+                logger.debug("Media URL: %s, Content-Type: %s", url, content_type)
+
+                # Check if the MIME type is supported
+                if content_type not in supported_mime_types:
+                    contains_invalid_media = True
+                    logger.warning("Unsupported media type: %s", content_type)
+                    break
+            else:
+                logger.error(
+                    "Failed to fetch media URL %s, status code: %s",
+                    url,
+                    response.status_code,
+                )
                 contains_invalid_media = True
-                logger.warning("Unsupported media type: %s", content_type)
                 break
         except requests.RequestException as e:
-            # If there's an error fetching the media, assume it's invalid
-            logger.error("Error checking media URL %s: %s", url, e)
+            logger.error("Error fetching media URL %s: %s", url, e)
             contains_invalid_media = True
             break
 
