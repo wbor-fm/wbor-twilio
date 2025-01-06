@@ -525,12 +525,14 @@ def check_media(sms_data):
             # Fetch the content type from the media URL
             response = requests.head(url, timeout=10)
             content_type = response.headers.get("Content-Type", "")
+            logger.debug("Media URL: %s, Content-Type: %s", url, content_type)
             if content_type not in supported_mime_types:
                 contains_invalid_media = True
+                logger.warning("Unsupported media type: %s", content_type)
                 break
         except requests.RequestException as e:
             # If there's an error fetching the media, assume it's invalid
-            print(f"Error checking media URL {url}: {e}")
+            logger.error("Error checking media URL %s: %s", url, e)
             contains_invalid_media = True
             break
 
@@ -563,12 +565,12 @@ def receive_sms():
         # and let the sender know that their message contains unsupported media and may not
         # be delivered as expected
         response_message = (
-            "Thank you for your message. However, it contains one or more unsupported media types. "
-            "As a result, it may not be delivered as expected."
+            "Thank you for your message! Unfortunately, it contains one or more unsupported media types. "
+            "As a result, it may not be delivered as expected. - WBOR"
         )
         resp.message(response_message)
     else:
-        response_message = "Thank you for your message!"
+        response_message = "Thank you for your message! - WBOR"
         resp.message(response_message)
 
     # Generate a unique message ID and add it to the SMS data
