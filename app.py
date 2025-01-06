@@ -1,6 +1,8 @@
 """
 Twilio Handler.
 
+Note: This app requires more than one worker process to work properly.
+
 We have a Twilio phone number that can receive SMS messages & more.
 When a SMS message is received at this number, the primary handler is configured as this Flask app.
 If this app doesn't respond with an OK status code, Twilio will fall back to the secondary 
@@ -76,6 +78,7 @@ import re
 import sys
 import os
 import signal
+import requests
 from threading import Thread
 from functools import wraps
 from datetime import datetime, timezone
@@ -123,7 +126,9 @@ twilio_client.http_client.logger.setLevel(logging.INFO)
 
 
 def terminate(exit_code=1):
-    """Terminate the process."""
+    """
+    Terminate the process.
+    """
     os.kill(os.getppid(), signal.SIGTERM)  # Gunicorn master
     os._exit(exit_code)  # Current thread
 
@@ -219,7 +224,9 @@ def publish_to_exchange(key, sub_key, data):
 
 
 def validate_twilio_request(f):
-    """Validates that incoming requests genuinely originated from Twilio"""
+    """
+    Validates that incoming requests genuinely originated from Twilio
+    """
 
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -489,6 +496,47 @@ def groupme_acknowledge():
     return "Unknown wbor_message_id", 404
 
 
+def check_media(sms_data):
+    """
+    Check the media URLs in an SMS message for unsupported types.
+
+    Parameters:
+    - sms_data (dict): The SMS message data.
+
+    Returns:
+    - bool: True if the message contains unsupported media, False otherwise.
+
+    Note:
+    - Change list of supported MIME types as needed downstream.
+    """
+    num_media = int(sms_data.get("NumMedia", 0))
+    if num_media == 0:
+        return False
+
+    media_urls = [sms_data.get(f"MediaUrl{i}") for i in range(0, num_media)]
+    if not any(media_urls):
+        return False
+
+    supported_mime_types = {"image/jpeg", "image/png"}
+    contains_invalid_media = False
+
+    for url in media_urls:
+        try:
+            # Fetch the content type from the media URL
+            response = requests.head(url, timeout=10)
+            content_type = response.headers.get("Content-Type", "")
+            if content_type not in supported_mime_types:
+                contains_invalid_media = True
+                break
+        except requests.RequestException as e:
+            # If there's an error fetching the media, assume it's invalid
+            print(f"Error checking media URL {url}: {e}")
+            contains_invalid_media = True
+            break
+
+    return contains_invalid_media
+
+
 @app.route("/sms", methods=["POST"])
 @validate_twilio_request
 def receive_sms():
@@ -497,12 +545,31 @@ def receive_sms():
 
     Returns:
     - str: A TwiML response to acknowledge receipt of the message (required by Twilio).
-        If a response is not sent, Twilio will fall back to the secondary message handler.
+
+    Note:
+    If a response is not returned, Twilio will fall back to the secondary message handler.
     """
     sms_data = request.form.to_dict()
     logger.debug("Received SMS message: %s", sms_data)
     logger.info("Processing message from: `%s`", sms_data.get("From"))
     resp = MessagingResponse()  # Required by Twilio
+
+    invalid_media = False
+    if int(sms_data.get("NumMedia", 0)) > 0:
+        invalid_media = check_media(sms_data)
+
+    if invalid_media:
+        # If any contain a type that is unsupported, update the message body to reflect this
+        # and let the sender know that their message contains unsupported media and may not
+        # be delivered as expected
+        response_message = (
+            "Thank you for your message. However, it contains one or more unsupported media types. "
+            "As a result, it may not be delivered as expected."
+        )
+        resp.message(response_message)
+    else:
+        response_message = "Thank you for your message!"
+        resp.message(response_message)
 
     # Generate a unique message ID and add it to the SMS data
     message_id = str(uuid4())
@@ -526,17 +593,18 @@ def receive_sms():
         logger.error("Error fetching sender name: %s", str(e))
         sender_name = "Unknown"
     sms_data["SenderName"] = sender_name
+
     sms_data["source"] = SOURCE
 
     # `sms_data` now includes original Twilio content, `SenderName`, `source`, and `wbor_message_id`
     Thread(target=publish_to_exchange, args=(SOURCE, "sms.incoming", sms_data)).start()
     # TODO: if the sender is banned, append `.banned` to the routing key, that way downstream
     # consumers can subscribe to only non-banned messages if desired (e.g. wbor-studio-dashboard)
+    # The alternative is setting a header value? Such as `x-banned: true`?
 
     # Wait for acknowledgment from the GroupMe consumer so that fallback handler can be
     # triggered if the message fails to process for any reason
     logger.debug("Waiting for acknowledgment for message_id: %s", message_id)
-    # TODO: don't use Redis, but instead RabbitMQ's built-in features for this
 
     # Note: this requires more than one worker process to work properly
     # (since the main thread is blocked waiting for the /acknowledgment)
@@ -751,9 +819,11 @@ def log_call_event():
 
 
 @app.route("/")
-def hello_world():
-    """Serve a simple static Hello World page at the root"""
-    return "<h1>wbor-twilio is online!</h1>"
+def is_online():
+    """
+    Health check endpoint.
+    """
+    return "OK", 200
 
 
 if __name__ == "__main__":
