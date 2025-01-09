@@ -496,7 +496,21 @@ def groupme_acknowledge():
     return "Unknown wbor_message_id", 404
 
 
-def check_media(sms_data):
+def has_media(sms_data):
+    """
+    Check for the presence of media in an SMS message.
+
+    Parameters:
+    - sms_data (dict): The SMS message data.
+
+    Returns:
+    - bool: True if the message contains media, False otherwise.
+    """
+    num_media = int(sms_data.get("NumMedia", 0))
+    return num_media > 0
+
+
+def has_unsupported_media(sms_data):
     """
     Check the media URLs in an SMS message for unsupported types.
 
@@ -511,10 +525,12 @@ def check_media(sms_data):
     """
     num_media = int(sms_data.get("NumMedia", 0))
     if num_media == 0:
+        # No media to check
         return False
 
     media_urls = [sms_data.get(f"MediaUrl{i}") for i in range(0, num_media)]
     if not any(media_urls):
+        # If for some reason there are no URLs, no media to check
         return False
 
     supported_mime_types = {"image/jpeg", "image/png", "image/gif"}
@@ -566,19 +582,19 @@ def receive_sms():
     logger.info("Processing message from: `%s`", sms_data.get("From"))
     resp = MessagingResponse()  # Required by Twilio
 
-    invalid_media = False
-    if int(sms_data.get("NumMedia", 0)) > 0:
-        invalid_media = check_media(sms_data)
-
-    if invalid_media:
-        # If any contain a type that is unsupported, update the message body to reflect this
-        # and let the sender know that their message contains unsupported media and may not
-        # be delivered as expected
-        response_message = (
-            "Thank you for your message! Unfortunately, it contains one or more unsupported media types. "
-            "As a result, it may not be delivered as expected. - WBOR"
-        )
-        resp.message(response_message)
+    if has_media(sms_data):
+        if has_unsupported_media(sms_data):
+            # If any contain a type that is unsupported, update the message body to reflect this
+            # and let the sender know that their message contains unsupported media and may not
+            # be delivered as expected
+            response_message = (
+                "Thank you for your message! Unfortunately, it contains one or more unsupported media types. "
+                "As a result, it may not be delivered as expected. - WBOR"
+            )
+            resp.message(response_message)
+        else:
+            response_message = "Thank you for your message! Unfortunately, we don't support media at this time, so the DJ won't see any photos or videos sent. - WBOR"
+            resp.message(response_message)
     else:
         response_message = "Thank you for your message! - WBOR"
         resp.message(response_message)
