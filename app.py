@@ -294,7 +294,15 @@ def fetch_name(sms_data):
         )
 
         caller_name = phone_info.caller_name or "Unknown"
-        logger.info("Fetched name: %s", caller_name.get("caller_name", "Unknown"))
+
+        if caller_name.get("caller_name", None) is None:
+            logger.debug("No caller name found for number: %s", phone_number)
+            return "Unknown"
+        else:
+            logger.info(
+                "Fetched name: %s",
+                caller_name.get("caller_name", "Unknown (this shouldn't happen)"),
+            )
         return caller_name.get("caller_name", "Unknown")
     except TwilioRestException as e:
         logger.error(
