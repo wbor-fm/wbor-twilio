@@ -589,14 +589,16 @@ def receive_sms():
             # be delivered as expected
             response_message = (
                 "Thank you for your message! Unfortunately, it contains one or more unsupported media types. "
-                "As a result, it may not be delivered as expected. - WBOR"
+                "As a result, it may not be delivered as expected. - WBOR (Note: DJs cannot reply to texts.)"
             )
             resp.message(response_message)
         else:
-            response_message = "Thank you for your message! Unfortunately, we don't support media at this time, so the DJ won't see any photos or videos sent. - WBOR"
+            response_message = "Thank you for your message! Unfortunately, we don't support media at this time, so the DJ won't see any photos or videos sent. - WBOR (Note: DJs cannot reply to texts.)"
             resp.message(response_message)
     else:
-        response_message = "Thank you for your message! - WBOR"
+        response_message = (
+            "Thank you for your message! - WBOR (Note: DJs cannot reply to texts.)"
+        )
         resp.message(response_message)
 
     # Generate a unique message ID and add it to the SMS data
