@@ -5,7 +5,7 @@ Note: This app requires more than one worker process to work properly.
 
 We have a Twilio phone number that can receive SMS messages & more.
 When a SMS message is received at this number, the primary handler is configured as this Flask app.
-If this app doesn't respond with an OK status code, Twilio will fall back to the secondary 
+If this app doesn't respond with an OK status code, Twilio will fall back to the secondary
 handler (which is a Twilio function).
 
 This app has two primary functions:
@@ -25,10 +25,10 @@ Incoming SMS:
 4. A unique message ID is generated and added to the message data as `wbor_message_id`.
 5. An acknowledgment event is set in Redis with the message ID.
     - This is used to ensure the message is processed properly downstream by wbor-groupme.
-    - (Upon receipt from the consumer of successful forwarding to GroupMe, 
+    - (Upon receipt from the consumer of successful forwarding to GroupMe,
         response is sent to Twilio.)
-6. Twilio phone number lookup is used to fetch the name of the sender and added to the 
-   message data if available as `SenderName`. If the lookup fails, the sender name is set to 
+6. Twilio phone number lookup is used to fetch the name of the sender and added to the
+   message data if available as `SenderName`. If the lookup fails, the sender name is set to
    `Unknown`.
     - If the lookup fails, the sender name is set to `Unknown`.
 7. The message data is published to RabbitMQ with the routing key `source.twilio.sms.incoming`.
@@ -36,14 +36,14 @@ Incoming SMS:
     - Routing key is in the format `source.<source>.<type>`
         - e.g. `source.twilio.sms.incoming` or `source.twilio.sms.outgoing`
     - The message type is also included in the JSON message body for downstream consumers.
-8. The main thread waits for an acknowledgment from the `/acknowledge` endpoint, indicating 
+8. The main thread waits for an acknowledgment from the `/acknowledge` endpoint, indicating
    successful processing by GroupMe.
     - If the acknowledgment is not received within a timeout, the message is discarded.
     - Subsequently, Twilio will fall back to the secondary handler.
     - NOTE: `/acknowledge` requires more than one worker process to work properly.
-    - NOTE: `/acknowledge` does not validate the SOURCE of the acknowledgment, which is a potential 
+    - NOTE: `/acknowledge` does not validate the SOURCE of the acknowledgment, which is a potential
       security risk (though unlikely in our closed network).
-9. Upon receiving the acknowledgment, return an empty TwiML response to Twilio to acknowledge 
+9. Upon receiving the acknowledgment, return an empty TwiML response to Twilio to acknowledge
    receipt of the message.
 
 Outgoing SMS:
@@ -78,13 +78,13 @@ import re
 import sys
 import os
 import signal
-import requests
 from threading import Thread
 from functools import wraps
 from datetime import datetime, timezone
 from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from uuid import uuid4
+import requests
 import pika
 from pika.exceptions import (
     AMQPError,
@@ -179,12 +179,12 @@ def publish_to_exchange(key, sub_key, data):
             ),
         )
         logger.debug(
-            "Publishing message body: %s", json.dumps({**data, "type": sub_key})
+            "Publishing message body: `%s`", json.dumps({**data, "type": sub_key})
         )
         # Handle difference between Twilio incoming and outgoing (custom) messages
         message_body_content = data.get("Body") or data.get("body")
         logger.info(
-            "Published message to `%s` with routing key: `source.%s.%s`: Sender: %s - %s - UID: %s",
+            "Published message to `%s` with routing key: `source.%s.%s`: Sender: `%s` - `%s` - UID: `%s`",
             RABBITMQ_EXCHANGE,
             key,
             sub_key,
@@ -213,14 +213,14 @@ def publish_to_exchange(key, sub_key, data):
         terminate()
     except AMQPChannelError as chan_error:
         logger.error(
-            "Channel error when publishing to `%s` with routing key `source.%s.%s`: %s",
+            "Channel error when publishing to `%s` with routing key `source.%s.%s`: `%s`",
             RABBITMQ_EXCHANGE,
             key,
             sub_key,
             chan_error,
         )
     except json.JSONDecodeError as json_error:
-        logger.error("JSON encoding error for message %s: %s", data, json_error)
+        logger.error("JSON encoding error for message `%s`: `%s`", data, json_error)
 
 
 def validate_twilio_request(f):
@@ -261,7 +261,7 @@ def validate_twilio_request(f):
 
         if not request_valid:
             logger.error("Twilio request validation failed!")
-            logger.debug("Form data used for validation: %s", request.form)
+            logger.debug("Form data used for validation: `%s`", request.form)
             return abort(403)
         return f(*args, **kwargs)
 
@@ -285,7 +285,7 @@ def fetch_name(sms_data):
     """
     phone_number = sms_data.get("From")
     if not phone_number:
-        logger.warning("No 'From' field in SMS data: %s", sms_data)
+        logger.warning("No `From` field in SMS data: `%s`", sms_data)
         return "Unknown"
 
     try:
@@ -296,17 +296,17 @@ def fetch_name(sms_data):
         caller_name = phone_info.caller_name or "Unknown"
 
         if caller_name.get("caller_name", None) is None:
-            logger.debug("No caller name found for number: %s", phone_number)
+            logger.debug("No caller name found for number: `%s`", phone_number)
             return "Unknown"
         else:
             logger.info(
-                "Fetched name: %s",
+                "Fetched name: `%s`",
                 caller_name.get("caller_name", "Unknown (this shouldn't happen)"),
             )
         return caller_name.get("caller_name", "Unknown")
     except TwilioRestException as e:
         logger.error(
-            "Failed to fetch caller name for number %s: %s", phone_number, str(e)
+            "Failed to fetch caller name for number `%s`: `%s`", phone_number, str(e)
         )
         return "Unknown"
 
@@ -332,7 +332,7 @@ def send_sms(recipient_number, message_body):
 
     if len(message_body) > TWILIO_CHARACTER_LIMIT:
         logger.error(
-            "Message body exceeds Twilio's character limit of %d",
+            "Message body exceeds Twilio's character limit of `%d`",
             TWILIO_CHARACTER_LIMIT,
         )
         raise ValueError(
@@ -340,7 +340,7 @@ def send_sms(recipient_number, message_body):
         )
 
     try:
-        logger.debug("Attempting to send SMS to %s", recipient_number)
+        logger.debug("Attempting to send SMS to `%s`", recipient_number)
         message = twilio_client.messages.create(
             to=recipient_number,
             from_=TWILIO_PHONE_NUMBER,
@@ -348,7 +348,7 @@ def send_sms(recipient_number, message_body):
         )
         return message.sid
     except TwilioRestException as e:
-        logger.error("Failed to send SMS to %s: %s", recipient_number, str(e))
+        logger.error("Failed to send SMS to `%s`: `%s`", recipient_number, str(e))
         return None
 
 
@@ -359,12 +359,12 @@ def start_outgoing_message_consumer():
     """
 
     def process_outgoing_message(channel, method, _properties, body):
-        logger.debug("Received message with routing key: %s", method.routing_key)
+        logger.debug("Received message with routing key: `%s`", method.routing_key)
 
         # Validate routing key
         if method.routing_key != SMS_OUTGOING_KEY:
             logger.warning(
-                "Discarding message due to mismatched routing key: %s (expecting `%s`)",
+                "Discarding message due to mismatched routing key: `%s` (expecting `%s`)",
                 method.routing_key,
                 SMS_OUTGOING_KEY,
             )
@@ -376,7 +376,7 @@ def start_outgoing_message_consumer():
             recipient_number = message.get("recipient_number")
             sms_body = message.get("body")
             if not recipient_number or not sms_body:
-                logger.warning("Invalid message format: %s", message)
+                logger.warning("Invalid message format: `%s`", message)
                 channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
                 return
 
@@ -384,7 +384,7 @@ def start_outgoing_message_consumer():
             msg_sid = send_sms(recipient_number, sms_body)
             if msg_sid:
                 logger.info(
-                    "Message sent successfully. UID: %s, SID: %s",
+                    "Message sent successfully. UID: `%s`, SID: `%s`",
                     message.get("wbor_message_id"),
                     msg_sid,
                 )
@@ -392,10 +392,10 @@ def start_outgoing_message_consumer():
                 # TODO: log the sent message to PG
 
         except (AMQPError, json.JSONDecodeError) as e:
-            logger.error("Failed to process message: %s", str(e))
+            logger.error("Failed to process message: `%s`", str(e))
             channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
         except ValueError as ve:
-            logger.error("Validation error: %s. Discarding message.", ve)
+            logger.error("Validation error: `%s`. Discarding message.", ve)
             channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
     def consumer_thread():
@@ -421,14 +421,14 @@ def start_outgoing_message_consumer():
                 try:
                     # Declare the queue
                     channel.queue_declare(queue=OUTGOING_QUEUE, durable=True)
-                    logger.debug("Queue declared: %s", OUTGOING_QUEUE)
+                    logger.debug("Queue declared: `%s`", OUTGOING_QUEUE)
                     channel.queue_bind(
                         queue=OUTGOING_QUEUE,
                         exchange=RABBITMQ_EXCHANGE,
                         routing_key=SMS_OUTGOING_KEY,  # Only bind to this key
                     )
                     logger.debug(
-                        "Queue `%s` bound to `%s` with routing key %s",
+                        "Queue `%s` bound to `%s` with routing key `%s`",
                         OUTGOING_QUEUE,
                         RABBITMQ_EXCHANGE,
                         SMS_OUTGOING_KEY,
@@ -456,7 +456,7 @@ def start_outgoing_message_consumer():
             except AMQPConnectionError as conn_error:
                 error_message = str(conn_error)
                 logger.error(
-                    "Failed to connect to RabbitMQ: %s",
+                    "Failed to connect to RabbitMQ: `%s`",
                     error_message,
                 )
                 if "CONNECTION_FORCED" in error_message and "shutdown" in error_message:
@@ -489,18 +489,18 @@ def groupme_acknowledge():
     ack_data = request.json
     if not ack_data or "wbor_message_id" not in ack_data:
         logger.error(
-            "Invalid acknowledgment data received at /acknowledge: %s", ack_data
+            "Invalid acknowledgment data received at /acknowledge: `%s`", ack_data
         )
         return "Invalid acknowledgment", 400
 
     message_id = ack_data.get("wbor_message_id")
-    logger.debug("Received acknowledgment for: %s", message_id)
+    logger.debug("Received acknowledgment for: `%s`", message_id)
 
     if get_ack_event(message_id):
         delete_ack_event(message_id)
         return "Acknowledgment received", 200
 
-    logger.warning("Acknowledgment received for unknown: %s", message_id)
+    logger.warning("Acknowledgment received for unknown: `%s`", message_id)
     return "Unknown wbor_message_id", 404
 
 
@@ -550,23 +550,23 @@ def has_unsupported_media(sms_data):
             response = requests.get(url, timeout=10, allow_redirects=True)
             if response.status_code == 200:
                 content_type = response.headers.get("Content-Type", "")
-                logger.debug("Media URL: %s, Content-Type: %s", url, content_type)
+                logger.debug("Media URL: `%s`, Content-Type: `%s`", url, content_type)
 
                 # Check if the MIME type is supported
                 if content_type not in supported_mime_types:
                     contains_invalid_media = True
-                    logger.warning("Unsupported media type: %s", content_type)
+                    logger.warning("Unsupported media type: `%s`", content_type)
                     break
             else:
                 logger.error(
-                    "Failed to fetch media URL %s, status code: %s",
+                    "Failed to fetch media URL `%s`, status code: `%s`",
                     url,
                     response.status_code,
                 )
                 contains_invalid_media = True
                 break
         except requests.RequestException as e:
-            logger.error("Error fetching media URL %s: %s", url, e)
+            logger.error("Error fetching media URL `%s`: `%s`", url, e)
             contains_invalid_media = True
             break
 
@@ -586,7 +586,7 @@ def receive_sms():
     If a response is not returned, Twilio will fall back to the secondary message handler.
     """
     sms_data = request.form.to_dict()
-    logger.debug("Received SMS message: %s", sms_data)
+    logger.debug("Received SMS message: `%s`", sms_data)
     logger.info("Processing message from: `%s`", sms_data.get("From"))
     resp = MessagingResponse()  # Required by Twilio
 
@@ -628,7 +628,7 @@ def receive_sms():
     try:
         sender_name = fetch_sender(sms_data)
     except (TwilioRestException, FuturesTimeoutError) as e:
-        logger.error("Error fetching sender name: %s", str(e))
+        logger.error("Error fetching sender name: `%s`", str(e))
         sender_name = "Unknown"
     sms_data["SenderName"] = sender_name
 
@@ -642,7 +642,7 @@ def receive_sms():
 
     # Wait for acknowledgment from the GroupMe consumer so that fallback handler can be
     # triggered if the message fails to process for any reason
-    logger.debug("Waiting for acknowledgment for message_id: %s", message_id)
+    logger.debug("Waiting for acknowledgment for message_id: `%s`", message_id)
 
     # Note: this requires more than one worker process to work properly
     # (since the main thread is blocked waiting for the /acknowledgment)
@@ -652,10 +652,10 @@ def receive_sms():
         if not ack_status:  # ACK received (deleted by /acknowledge endpoint)
             # So if it's not found, the message was processed
             # Return an empty TwiML response to acknowledge receipt of the message
-            logger.debug("Acknowledgment received: %s", message_id)
+            logger.debug("Acknowledgment received: `%s`", message_id)
             return str(resp)
     logger.error(
-        "Timeout met while waiting for acknowledgment for message_id: %s", message_id
+        "Timeout met while waiting for acknowledgment for message_id: `%s`", message_id
     )
     delete_ack_event(message_id)
     return "Failed to process message", 500
@@ -686,8 +686,6 @@ def browser_queue_outgoing_sms():
         abort(403, "Unauthorized access")
 
     recipient_number = request.args.get("recipient_number", "").replace(" ", "+")
-    message = request.args.get("body")
-
     if not recipient_number or not re.fullmatch(r"^\+?\d{10,15}$", recipient_number):
         if not recipient_number:
             logger.warning("Recipient number missing")
@@ -695,17 +693,25 @@ def browser_queue_outgoing_sms():
 
         if not recipient_number.startswith("+1"):
             logger.warning(
-                "Invalid recipient number format (recipient number must start with +1): %s",
+                "Invalid recipient number format (recipient number must start with +1): `%s`",
                 recipient_number,
             )
             abort(400, "Recipient number must start with +1")
-        logger.warning("Invalid recipient number format: %s", recipient_number)
+        logger.warning("Invalid recipient number format: `%s`", recipient_number)
         abort(400, "Invalid recipient number format (must use the E.164 standard)")
+    if recipient_number == TWILIO_PHONE_NUMBER:
+        logger.warning(
+            "Recipient number must not be the same as the sending number: `%s`",
+            recipient_number,
+        )
+        abort(400, "Recipient number must not be the same as the sending number")
+
+    message = request.args.get("body")
     if not message:
         logger.warning("Message body content missing")
         abort(400, "Message body text is required")
     if len(message) > TWILIO_CHARACTER_LIMIT:
-        logger.warning("Message too long: %d characters", len(message))
+        logger.warning("Message too long: `%d` characters", len(message))
         abort(400, "Message exceeds character limit")
 
     # Queue the message for sending
@@ -717,7 +723,7 @@ def browser_queue_outgoing_sms():
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     publish_to_exchange(SOURCE, "sms.outgoing", outgoing_message)
-    logger.info("Message queued for sending. UID: %s", message_id)
+    logger.info("Message queued for sending. UID: `%s`", message_id)
     return f"Message queued for sending to {recipient_number}"
 
 
@@ -754,11 +760,11 @@ def browser_ban_contact():
 
         if not ban_number.startswith("+1"):
             logger.warning(
-                "Invalid ban number format (ban number must start with +1): %s",
+                "Invalid ban number format (ban number must start with +1): `%s`",
                 ban_number,
             )
             abort(400, "Ban number must start with +1")
-        logger.warning("Invalid ban number format: %s", ban_number)
+        logger.warning("Invalid ban number format: `%s`", ban_number)
         abort(400, "Invalid ban number format (must use the E.164 standard)")
 
     # Queue the message for sending
@@ -769,7 +775,7 @@ def browser_ban_contact():
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     publish_to_exchange(SOURCE, "ban", body)
-    logger.info("Message queued for sending. UID: %s", message_id)
+    logger.info("Message queued for sending. UID: `%s`", message_id)
     return f"Ban queued for {ban_number}"
 
 
@@ -806,11 +812,11 @@ def browser_unban_contact():
 
         if not unban_number.startswith("+1"):
             logger.warning(
-                "Invalid unban number format (unban number must start with +1): %s",
+                "Invalid unban number format (unban number must start with +1): `%s`",
                 unban_number,
             )
             abort(400, "Unban number must start with +1")
-        logger.warning("Invalid unban number format: %s", unban_number)
+        logger.warning("Invalid unban number format: `%s`", unban_number)
         abort(400, "Invalid unban number format (must use the E.164 standard)")
 
     # Queue the message for sending
@@ -821,7 +827,7 @@ def browser_unban_contact():
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     publish_to_exchange(SOURCE, "unban", body)
-    logger.info("Message queued for sending. UID: %s", message_id)
+    logger.info("Message queued for sending. UID: `%s`", message_id)
     return f"Unban queued for {unban_number}"
 
 
@@ -836,8 +842,8 @@ def log_webhook():
     - str: A 202 Accepted response.
     """
     data = request.get_json()
-    logger.info("Received Voice Intelligence webhook fire with data: %s", data)
-    logger.info("Transcript SID: %s", data.get("transcript_sid"))
+    logger.info("Received Voice Intelligence webhook fire with data: `%s`", data)
+    logger.info("Transcript SID: `%s`", data.get("transcript_sid"))
     publish_to_exchange(SOURCE, "voice-intelligence", data)
     return "Accepted", 202
 
@@ -851,7 +857,7 @@ def log_call_event():
     - str: A 202 Accepted response.
     """
     data = request.form.to_dict()
-    logger.info("Received Call Event webhook fire with data: %s", data)
+    logger.info("Received Call Event webhook fire with data: `%s`", data)
     publish_to_exchange(SOURCE, "call-events", data)
     return "Accepted", 202
 
