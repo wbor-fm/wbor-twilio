@@ -81,7 +81,7 @@ There are two main ways to send a text from this app:
 - Via the `/send` endpoint in your browser (GET request).
   - Example:
 
-    ```
+    ```bash
     GET https://yourdomain.com/send?password=secret123&recipient_number=%2B12025550123&body=Hello+WBOR
     ```
 

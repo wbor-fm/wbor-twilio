@@ -4,12 +4,14 @@ Twilio Handler.
 Note: This app requires more than one worker process to work properly.
 
 We have a Twilio phone number that can receive SMS messages & more.
-When a SMS message is received at this number, the primary handler is configured as this Flask app.
-If this app doesn't respond with an OK status code, Twilio will fall back to the secondary
-handler (which is a Twilio function).
+When a SMS message is received at this number, the primary handler is
+configured as this Flask app. If this app doesn't respond with an OK
+status code, Twilio will fall back to the secondary handler (which is a
+Twilio function).
 
 This app has two primary functions:
-1. Publish incoming SMS messages to RabbitMQ for processing by other services.
+1. Publish incoming SMS messages to RabbitMQ for processing by other
+    services.
 2. Send outgoing SMS messages using the Twilio API.
 
 Future functionality may include (e.g. logging in PG):
@@ -21,34 +23,45 @@ The workflows are as follows.
 Incoming SMS:
 1. A SMS message is received by Twilio.
 2. Twilio sends the message to this app at the `/sms` endpoint.
-3. @validate_twilio_request decorator validates the authenticity of the request.
-4. A unique message ID is generated and added to the message data as `wbor_message_id`.
+3. @validate_twilio_request decorator validates the authenticity of the
+    request.
+4. A unique message ID is generated and added to the message data as
+    `wbor_message_id`.
 5. An acknowledgment event is set in Redis with the message ID.
-    - This is used to ensure the message is processed properly downstream by wbor-groupme.
-    - (Upon receipt from the consumer of successful forwarding to GroupMe,
-        response is sent to Twilio.)
-6. Twilio phone number lookup is used to fetch the name of the sender and added to the
-   message data if available as `SenderName`. If the lookup fails, the sender name is set to
-   `Unknown`.
+    - This is used to ensure the message is processed properly
+        downstream by wbor-groupme.
+    - (Upon receipt from the consumer of successful forwarding to
+        GroupMe, response is sent to Twilio.)
+6. Twilio phone number lookup is used to fetch the name of the sender
+    and added to the message data if available as `SenderName`. If the
+    lookup fails, the sender name is set to `Unknown`.
     - If the lookup fails, the sender name is set to `Unknown`.
-7. The message data is published to RabbitMQ with the routing key `source.twilio.sms.incoming`.
+7. The message data is published to RabbitMQ with the routing key
+    `source.twilio.sms.incoming`.
     - Sent to `source_exchange` (after asserting that it exists)
     - Routing key is in the format `source.<source>.<type>`
-        - e.g. `source.twilio.sms.incoming` or `source.twilio.sms.outgoing`
-    - The message type is also included in the JSON message body for downstream consumers.
-8. The main thread waits for an acknowledgment from the `/acknowledge` endpoint, indicating
-   successful processing by GroupMe.
-    - If the acknowledgment is not received within a timeout, the message is discarded.
+        - e.g. `source.twilio.sms.incoming` or
+            `source.twilio.sms.outgoing`
+    - The message type is also included in the JSON message body for
+        downstream consumers.
+8. The main thread waits for an acknowledgment from the `/acknowledge`
+    endpoint, indicating successful processing by GroupMe.
+    - If the acknowledgment is not received within a timeout, the
+        message is discarded.
     - Subsequently, Twilio will fall back to the secondary handler.
-    - NOTE: `/acknowledge` requires more than one worker process to work properly.
-    - NOTE: `/acknowledge` does not validate the SOURCE of the acknowledgment, which is a potential
-      security risk (though unlikely in our closed network).
-9. Upon receiving the acknowledgment, return an empty TwiML response to Twilio to acknowledge
-   receipt of the message.
+    - NOTE: `/acknowledge` requires more than one worker process to work
+        properly.
+    - NOTE: `/acknowledge` does not validate the SOURCE of the
+        acknowledgment, which is a potential security risk (though
+        unlikely in our closed network).
+9. Upon receiving the acknowledgment, return an empty TwiML response to
+    Twilio to acknowledge receipt of the message.
 
 Outgoing SMS:
-0. Upon launching the app, a consumer thread is started to listen for outgoing SMS messages.
-    - The consumer listens for messages with the routing key 'source.twilio.sms.outgoing'.
+0. Upon launching the app, a consumer thread is started to listen for
+    outgoing SMS messages.
+    - The consumer listens for messages with the routing key
+        'source.twilio.sms.outgoing'.
 1. A GET request is made using the `/send` endpoint in a browser.
     - Expects a password for authorization set by APP_PASSWORD.
     - Expects `recipient_number` and `body` as query parameters.
@@ -58,7 +71,8 @@ Outgoing SMS:
     - `body` body must exist.
 3. Generates a unique message ID for tracking, set as `wbor_message_id`.
 4. Prepares the outgoing message data, including a timestamp.
-5. Publishes it to RabbitMQ with the routing key `source.twilio.sms.outgoing`.
+5. Publishes it to RabbitMQ with the routing key
+    `source.twilio.sms.outgoing`.
 6. The consumer thread consumes by running process_outgoing_message().
 
 Emits keys:
@@ -72,49 +86,52 @@ Emits keys:
 TODO: fix not shutting down when MQ connection breaks?
 """
 
-import logging
 import json
-import re
-import sys
+import logging
 import os
+import re
 import signal
-from threading import Thread
-from functools import wraps
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
-from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from functools import wraps
+from threading import Thread
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from uuid import uuid4
-import requests
+
 import pika
+import requests
+from flask import Flask, abort, request
 from pika.exceptions import (
-    AMQPError,
-    AMQPConnectionError,
     AMQPChannelError,
+    AMQPConnectionError,
+    AMQPError,
     ChannelClosedByBroker,
 )
-from flask import Flask, abort, request
-from twilio.rest import Client
-from twilio.request_validator import RequestValidator
 from twilio.base.exceptions import TwilioRestException
+from twilio.request_validator import RequestValidator
+from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
-from utils.logging import configure_logging
-from utils.redis import redis_client, set_ack_event, get_ack_event, delete_ack_event
+
 from config import (
-    APP_PORT,
     APP_PASSWORD,
-    SOURCE,
+    APP_PORT,
     OUTGOING_QUEUE,
+    RABBITMQ_EXCHANGE,
+    RABBITMQ_HOST,
+    RABBITMQ_PASS,
+    RABBITMQ_USER,
+    REDIS_ACK_EXPIRATION_S,
     SMS_OUTGOING_KEY,
+    SOURCE,
     TWILIO_ACCOUNT_SID,
     TWILIO_AUTH_TOKEN,
-    TWILIO_PHONE_NUMBER,
     TWILIO_CHARACTER_LIMIT,
-    RABBITMQ_HOST,
-    RABBITMQ_USER,
-    RABBITMQ_PASS,
-    RABBITMQ_EXCHANGE,
-    REDIS_ACK_EXPIRATION,
+    TWILIO_PHONE_NUMBER,
 )
+from utils.logging import configure_logging
+from utils.redis import delete_ack_event, get_ack_event, redis_client, set_ack_event
 
 logging.root.handlers = []
 logger = configure_logging()
@@ -142,8 +159,10 @@ def publish_to_exchange(key, sub_key, data):
 
     Parameters:
     - key (str): The name of the message key.
-    - sub_key (str): The name of the sub-key for the message. (e.g. 'sms', 'call')
-    - data (dict): The message content, which will be converted to JSON format.
+    - sub_key (str): The name of the sub-key for the message. (e.g.
+        'sms', 'call')
+    - data (dict): The message content, which will be converted to JSON
+        format.
     """
     try:
         logger.debug("Attempting to connect to RabbitMQ...")
@@ -169,19 +188,19 @@ def publish_to_exchange(key, sub_key, data):
             exchange=RABBITMQ_EXCHANGE,
             routing_key=f"source.{key}.{sub_key}",
             body=json.dumps(
-                {**data, "type": sub_key}  # Include type in the message body
-            ).encode(),  # Encodes msg as bytes. RabbitMQ requires byte data
+                {**data, "type": sub_key}  # Include type in message body
+            ).encode(),  # Encodes msg as bytes RabbitMQ requires bytes
             properties=pika.BasicProperties(
                 headers={
                     "x-retry-count": 0
                 },  # Initialize retry count for other consumers
-                delivery_mode=2,  # Persistent message - write to disk for safety
+                delivery_mode=2,  # Persistent message, write for safety
             ),
         )
         logger.debug(
             "Publishing message body: `%s`", json.dumps({**data, "type": sub_key})
         )
-        # Handle difference between Twilio incoming and outgoing (custom) messages
+        # Handle difference between Twilio incoming/outgoing messages
         message_body_content = data.get("Body") or data.get("body")
         logger.info(
             "Published message to `%s` with routing key: `source.%s.%s`: Sender: `%s` - `%s` - UID: `%s`",
@@ -232,13 +251,14 @@ def validate_twilio_request(f):
     def decorated_function(*args, **kwargs):
         validator = RequestValidator(TWILIO_AUTH_TOKEN)
 
-        # Parse and reconstruct the URL to ensure query strings are encoded
+        # Parse+reconstruct the URL to ensure query strings are encoded
         parsed_url = urlparse(request.url)
         query = urlencode(parse_qsl(parsed_url.query, keep_blank_values=True))
 
         # Ensure the path includes /twilio prefix
-        # This is a hack because I couldn't figure out how to get NGINX to not
-        # strip /twilio when putting this app behind a proxy instead of serving at the root
+        # This is a hack because I couldn't figure out how to get NGINX
+        # to not strip /twilio when putting this app behind a proxy
+        # instead of serving at the root
         path_with_prefix = parsed_url.path
         if not path_with_prefix.startswith("/twilio"):
             path_with_prefix = "/twilio" + path_with_prefix
@@ -270,15 +290,18 @@ def validate_twilio_request(f):
 
 def fetch_name(sms_data):
     """
-    Attempt to fetch the name associated with a phone number using the Twilio Lookup API.
+    Attempt to fetch the name associated with a phone number using the
+    Twilio Lookup API.
 
-    caller_name is the name associated with the phone number in the Twilio database.
-    If the name is not available, it returns 'Unknown'.
+    caller_name is the name associated with the phone number in the
+    Twilio database. If the name is not available, it returns 'Unknown'.
 
-    Don't confuse this with the 'From' field in the SMS data, which is the phone number.
+    Don't confuse this with the 'From' field in the SMS data, which is
+    the phone number.
 
     Parameters:
-    - sms_data (dict): The SMS message data containing the sender's phone number.
+    - sms_data (dict): The SMS message data containing the sender's
+        phone number.
 
     Returns:
     - str: The name of the sender if available, otherwise 'Unknown'.
@@ -317,7 +340,8 @@ def send_sms(recipient_number, message_body):
     Logs calls to Postgres.
 
     Parameters:
-    - recipient_number (str): The phone number to send the message to (in E.164 format).
+    - recipient_number (str): The phone number to send the message to
+        (in E.164 format).
     - message_body (str): The body of the SMS message.
 
     Returns:
@@ -435,7 +459,8 @@ def start_outgoing_message_consumer():
                     )
                 except ChannelClosedByBroker as e:
                     if "inequivalent arg" in str(e):
-                        # If the queue already exists with different attributes, log and terminate
+                        # If the queue already exists with different
+                        # attributes, log and terminate
                         logger.warning(
                             "Queue already exists with mismatched attributes. "
                             "Please resolve this conflict before restarting the application."
@@ -482,9 +507,11 @@ def start_outgoing_message_consumer():
 @app.route("/acknowledge", methods=["POST"])
 def groupme_acknowledge():
     """
-    Endpoint for receiving acknowledgment from the GROUPME_QUEUE consumer.
+    Endpoint for receiving acknowledgment from the GROUPME_QUEUE
+    consumer.
 
-    Expects a JSON payload with a 'wbor_message_id' field indicating the message processed.
+    Expects a JSON payload with a 'wbor_message_id' field indicating the
+    message processed.
     """
     ack_data = request.json
     if not ack_data or "wbor_message_id" not in ack_data:
@@ -526,7 +553,8 @@ def has_unsupported_media(sms_data):
     - sms_data (dict): The SMS message data.
 
     Returns:
-    - bool: True if the message contains unsupported media, False otherwise.
+    - bool: True if the message contains unsupported media, False
+        otherwise.
 
     Note:
     - Change list of supported MIME types as needed downstream.
@@ -573,39 +601,86 @@ def has_unsupported_media(sms_data):
     return contains_invalid_media
 
 
+def get_automation_status() -> bool:
+    """
+    Check the status of the automation system.
+
+    Returns:
+    - bool: True if automation is enabled, False otherwise.
+    """
+    try:
+        response = requests.get("https://api-1.wbor.org/api/playlists", timeout=5)
+        response.raise_for_status()
+        items = response.json().get("items")
+        curr_show = items[0] if items else {}
+        auto_status = curr_show.get("automation")
+        if auto_status is None:
+            logger.warning("Automation status not found in response")
+            return False
+        if auto_status == 1:
+            logger.debug("Automation is enabled")
+            return True
+        logger.debug("Automation is disabled")
+        return False
+    except requests.RequestException as e:
+        logger.error("Error fetching automation status: `%s`", e)
+        return False
+    except (KeyError, IndexError) as e:
+        logger.error("Error parsing automation status: `%s`", e)
+        return False
+
+
 @app.route("/sms", methods=["POST"])
 @validate_twilio_request
 def receive_sms():
     """
-    Handler for incoming SMS messages from Twilio. Publishes messages to RabbitMQ.
+    Handler for incoming SMS messages from Twilio. Publishes messages to
+    RabbitMQ.
 
     Returns:
-    - str: A TwiML response to acknowledge receipt of the message (required by Twilio).
+    - str: A TwiML response to acknowledge receipt of the message
+        (required by Twilio).
 
     Note:
-    If a response is not returned, Twilio will fall back to the secondary message handler.
+    If a response is not returned, Twilio will fall back to the
+    secondary message handler.
     """
     sms_data = request.form.to_dict()
     logger.debug("Received SMS message: `%s`", sms_data)
     logger.info("Processing message from: `%s`", sms_data.get("From"))
     resp = MessagingResponse()  # Required by Twilio
 
-    if has_media(sms_data):
-        if has_unsupported_media(sms_data):
-            # If any contain a type that is unsupported, update the message body to reflect this
-            # and let the sender know that their message contains unsupported media and may not
-            # be delivered as expected
-            response_message = (
-                "Thank you for your message! Unfortunately, it contains one or more unsupported media types. "
-                "As a result, it may not be delivered as expected. - WBOR (Note: DJs cannot reply to texts.)"
-            )
-            resp.message(response_message)
+    is_automation = get_automation_status()
+
+    if not is_automation:
+        if has_media(sms_data):
+            if has_unsupported_media(sms_data):
+                # If any contain a type that is unsupported, update the message body to reflect this
+                # and let the sender know that their message contains unsupported media and may not
+                # be delivered as expected
+                response_message = (
+                    "Thank you for your message! Unfortunately, it contains "
+                    "one or more unsupported media types. "
+                    "As a result, it may not be delivered as expected. "
+                    "- WBOR (Note: DJs cannot reply to texts.)"
+                )
+                resp.message(response_message)
+            else:
+                response_message = (
+                    "Thank you for your message! Unfortunately, we don't support "
+                    "media at this time, so the DJ won't see any photos or videos"
+                    " sent. - WBOR (Note: DJs cannot reply to texts.)"
+                )
+                resp.message(response_message)
         else:
-            response_message = "Thank you for your message! Unfortunately, we don't support media at this time, so the DJ won't see any photos or videos sent. - WBOR (Note: DJs cannot reply to texts.)"
+            response_message = (
+                "Thank you for your message! - WBOR (Note: DJs cannot reply to texts.)"
+            )
             resp.message(response_message)
     else:
         response_message = (
-            "Thank you for your message! - WBOR (Note: DJs cannot reply to texts.)"
+            "There are currently no DJs in the studio to receive your message. "
+            "The next person in the studio will see your message. - WBOR"
         )
         resp.message(response_message)
 
@@ -647,7 +722,7 @@ def receive_sms():
     # Note: this requires more than one worker process to work properly
     # (since the main thread is blocked waiting for the /acknowledgment)
     start_time = datetime.now()
-    while (datetime.now() - start_time).seconds < REDIS_ACK_EXPIRATION:
+    while (datetime.now() - start_time).seconds < REDIS_ACK_EXPIRATION_S:
         ack_status = redis_client.get(message_id)
         if not ack_status:  # ACK received (deleted by /acknowledge endpoint)
             # So if it's not found, the message was processed
@@ -664,7 +739,8 @@ def receive_sms():
 @app.route("/send", methods=["GET"])
 def browser_queue_outgoing_sms():
     """
-    Send an SMS message using the Twilio API from a browser address bar. Requires a password.
+    Send an SMS message using the Twilio API from a browser address bar.
+    Requires a password.
 
     Parameters:
     - recipient_number (str): The phone number to send the message to.

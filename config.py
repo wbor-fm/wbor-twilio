@@ -3,6 +3,7 @@ App configuration file. Load environment variables from .env file.
 """
 
 import os
+
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -26,4 +27,4 @@ RABBITMQ_EXCHANGE = os.getenv("RABBITMQ_EXCHANGE", "source_exchange")
 REDIS_HOST = os.getenv("REDIS_HOST", "wbor-redis-server")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
-REDIS_ACK_EXPIRATION = int(os.getenv("REDIS_ACK_EXPIRATION", "60"))  # in seconds
+REDIS_ACK_EXPIRATION_S = int(os.getenv("REDIS_ACK_EXPIRATION", "60"))

@@ -3,12 +3,14 @@ App launch configuration for Gunicorn.
 """
 
 import threading
+
 from app import start_outgoing_message_consumer
 
 
 def post_fork(_server, _worker):
     """
-    Start the outgoing message consumer in a separate thread in the worker process.
+    Start the outgoing message consumer in a separate thread in the
+    worker process.
     """
 
     consumer_thread = threading.Thread(

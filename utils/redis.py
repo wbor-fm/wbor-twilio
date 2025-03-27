@@ -3,7 +3,8 @@ Redis utilities.
 """
 
 from redis import Redis
-from config import REDIS_ACK_EXPIRATION, REDIS_DB, REDIS_HOST, REDIS_PORT
+
+from config import REDIS_ACK_EXPIRATION_S, REDIS_DB, REDIS_HOST, REDIS_PORT
 from utils.logging import configure_logging
 
 logger = configure_logging(__name__)
@@ -21,7 +22,7 @@ def set_ack_event(message_id):
     Parameters:
     - message_id (str): The unique message ID to set an acknowledgment event for.
     """
-    redis_client.set(message_id, "pending", ex=REDIS_ACK_EXPIRATION)
+    redis_client.set(message_id, "pending", ex=REDIS_ACK_EXPIRATION_S)
     logger.debug("Set ack event: %s", message_id)
 
 
