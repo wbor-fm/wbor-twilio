@@ -679,8 +679,8 @@ def receive_sms():
             resp.message(response_message)
     else:
         response_message = (
-            "There are currently no DJs in the studio to receive your message. "
-            "The next person in the studio will see your message. - WBOR"
+            "There are currently no DJs in the studio to receive your text :( "
+            "Try again later or view our schedule at wbor.org/schedule"
         )
         resp.message(response_message)
 
