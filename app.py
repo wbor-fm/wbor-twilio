@@ -334,7 +334,7 @@ def fetch_name(sms_data):
         return "Unknown"
 
 
-def send_sms(recipient_number, message_body):
+def send_sms(recipient_number, message_body, wbor_message_id=None):
     """
     Sends an SMS message using the Twilio API.
     Logs calls to Postgres.
@@ -364,7 +364,11 @@ def send_sms(recipient_number, message_body):
         )
 
     try:
-        logger.debug("Attempting to send SMS to `%s`", recipient_number)
+        logger.debug(
+            "Attempting to send SMS to `%s` - UID: `%s`",
+            recipient_number,
+            wbor_message_id,
+        )
         message = twilio_client.messages.create(
             to=recipient_number,
             from_=TWILIO_PHONE_NUMBER,
@@ -372,7 +376,12 @@ def send_sms(recipient_number, message_body):
         )
         return message.sid
     except TwilioRestException as e:
-        logger.error("Failed to send SMS to `%s`: `%s`", recipient_number, str(e))
+        logger.error(
+            "Failed to send SMS to `%s`: `%s` - UID: `%s`",
+            recipient_number,
+            str(e),
+            wbor_message_id,
+        )
         return None
 
 
@@ -399,13 +408,20 @@ def start_outgoing_message_consumer():
             message = json.loads(body)
             recipient_number = message.get("recipient_number")
             sms_body = message.get("body")
-            if not recipient_number or not sms_body:
-                logger.warning("Invalid message format: `%s`", message)
+            wbor_message_id = message.get("wbor_message_id")
+            if not recipient_number:
+                logger.warning(
+                    "Invalid message format (missing `recipient_number`): `%s`", message
+                )
+                channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                return
+            if not sms_body:
+                logger.warning("Invalid message format (missing `body`): `%s`", message)
                 channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
                 return
 
             # Attempt to send the SMS
-            msg_sid = send_sms(recipient_number, sms_body)
+            msg_sid = send_sms(recipient_number, sms_body, wbor_message_id)
             if msg_sid:
                 logger.info(
                     "Message sent successfully. UID: `%s`, SID: `%s`",
