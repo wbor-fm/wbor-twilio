@@ -103,12 +103,7 @@ from uuid import uuid4
 import pika
 import requests
 from flask import Flask, abort, request
-from pika.exceptions import (
-    AMQPChannelError,
-    AMQPConnectionError,
-    AMQPError,
-    ChannelClosedByBroker,
-)
+from pika.exceptions import AMQPChannelError, AMQPConnectionError, ChannelClosedByBroker
 from twilio.base.exceptions import TwilioRestException
 from twilio.request_validator import RequestValidator
 from twilio.rest import Client
@@ -142,7 +137,7 @@ twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 twilio_client.http_client.logger.setLevel(logging.INFO)
 
 
-def terminate(exit_code=1):
+def terminate(exit_code: int = 1) -> None:
     """
     Terminate the process.
     """
@@ -153,7 +148,7 @@ def terminate(exit_code=1):
 # RabbitMQ
 
 
-def publish_to_exchange(key, sub_key, data):
+def publish_to_exchange(key: str, sub_key: str, data: dict) -> None:
     """
     Publishes a message to a RabbitMQ exchange.
 
@@ -203,7 +198,8 @@ def publish_to_exchange(key, sub_key, data):
         # Handle difference between Twilio incoming/outgoing messages
         message_body_content = data.get("Body") or data.get("body")
         logger.info(
-            "Published message to `%s` with routing key: `source.%s.%s`: Sender: `%s` - `%s` - UID: `%s`",
+            "Published message to `%s` with routing key: `source.%s.%s`: "
+            "Sender: `%s` - `%s` - UID: `%s`",
             RABBITMQ_EXCHANGE,
             key,
             sub_key,
@@ -242,7 +238,7 @@ def publish_to_exchange(key, sub_key, data):
         logger.error("JSON encoding error for message `%s`: `%s`", data, json_error)
 
 
-def validate_twilio_request(f):
+def validate_twilio_request(f: callable) -> callable:
     """
     Validates that incoming requests genuinely originated from Twilio
     """
@@ -288,7 +284,7 @@ def validate_twilio_request(f):
     return decorated_function
 
 
-def fetch_name(sms_data):
+def fetch_name(sms_data: dict) -> str:
     """
     Attempt to fetch the name associated with a phone number using the
     Twilio Lookup API.
@@ -334,7 +330,65 @@ def fetch_name(sms_data):
         return "Unknown"
 
 
-def send_sms(recipient_number, message_body, wbor_message_id=None):
+def process_outgoing_sms_message(
+    channel: pika.channel.Channel, method: pika.spec.Basic.Deliver, body: bytes
+) -> None:
+    """
+    Processes an outgoing SMS message from RabbitMQ.
+    """
+    logger.debug("Received message with routing key: `%s`", method.routing_key)
+
+    # Validate routing key
+    if method.routing_key != SMS_OUTGOING_KEY:
+        logger.warning(
+            "Discarding message due to mismatched routing key: `%s` (expecting `%s`)",
+            method.routing_key,
+            SMS_OUTGOING_KEY,
+        )
+        channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+        return
+
+    try:
+        message = json.loads(body)
+        recipient_number = message.get("recipient_number")
+        sms_body = message.get("body")
+        wbor_message_id = message.get("wbor_message_id")
+
+        if not recipient_number:
+            logger.warning(
+                "Invalid message format (missing `recipient_number`): `%s`", message
+            )
+            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            return
+        if not sms_body:
+            logger.warning("Invalid message format (missing `body`): `%s`", message)
+            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            return
+
+        # Attempt to send the SMS
+        msg_sid = send_sms(recipient_number, sms_body, wbor_message_id)
+        if msg_sid:
+            logger.info(
+                "Message sent successfully. UID: `%s`, SID: `%s`",
+                message.get("wbor_message_id"),
+                msg_sid,
+            )
+            channel.basic_ack(delivery_tag=method.delivery_tag)
+        else:
+            logger.error(
+                "Failed to send SMS for UID: `%s`", message.get("wbor_message_id")
+            )
+            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+    except (json.JSONDecodeError, KeyError, ValueError) as specific_error:
+        logger.exception(
+            "Unhandled exception while processing message: `%s`", specific_error
+        )
+        channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+
+
+def send_sms(
+    recipient_number: str, message_body: str, wbor_message_id: str = None
+) -> str:
     """
     Sends an SMS message using the Twilio API.
     Logs calls to Postgres.
@@ -385,60 +439,13 @@ def send_sms(recipient_number, message_body, wbor_message_id=None):
         return None
 
 
-def start_outgoing_message_consumer():
+def start_outgoing_message_consumer() -> None:
     """
     Starts a RabbitMQ consumer for the outgoing message queue.
     Handles sending SMS messages using the Twilio API.
     """
 
-    def process_outgoing_message(channel, method, _properties, body):
-        logger.debug("Received message with routing key: `%s`", method.routing_key)
-
-        # Validate routing key
-        if method.routing_key != SMS_OUTGOING_KEY:
-            logger.warning(
-                "Discarding message due to mismatched routing key: `%s` (expecting `%s`)",
-                method.routing_key,
-                SMS_OUTGOING_KEY,
-            )
-            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-            return
-
-        try:
-            message = json.loads(body)
-            recipient_number = message.get("recipient_number")
-            sms_body = message.get("body")
-            wbor_message_id = message.get("wbor_message_id")
-            if not recipient_number:
-                logger.warning(
-                    "Invalid message format (missing `recipient_number`): `%s`", message
-                )
-                channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-                return
-            if not sms_body:
-                logger.warning("Invalid message format (missing `body`): `%s`", message)
-                channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-                return
-
-            # Attempt to send the SMS
-            msg_sid = send_sms(recipient_number, sms_body, wbor_message_id)
-            if msg_sid:
-                logger.info(
-                    "Message sent successfully. UID: `%s`, SID: `%s`",
-                    message.get("wbor_message_id"),
-                    msg_sid,
-                )
-                channel.basic_ack(delivery_tag=method.delivery_tag)
-                # TODO: log the sent message to PG
-
-        except (AMQPError, json.JSONDecodeError) as e:
-            logger.error("Failed to process message: `%s`", str(e))
-            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-        except ValueError as ve:
-            logger.error("Validation error: `%s`. Discarding message.", ve)
-            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-
-    def consumer_thread():
+    def consumer_thread() -> None:
         while True:
             try:
                 logger.debug("Connecting to RabbitMQ for outgoing SMS messages...")
@@ -487,7 +494,7 @@ def start_outgoing_message_consumer():
                 channel.basic_qos(prefetch_count=1)
                 channel.basic_consume(
                     queue=OUTGOING_QUEUE,
-                    on_message_callback=process_outgoing_message,
+                    on_message_callback=process_outgoing_sms_message,
                 )
 
                 logger.info(
@@ -521,7 +528,7 @@ def start_outgoing_message_consumer():
 
 
 @app.route("/acknowledge", methods=["POST"])
-def groupme_acknowledge():
+def groupme_acknowledge() -> str:
     """
     Endpoint for receiving acknowledgment from the GROUPME_QUEUE
     consumer.
@@ -547,7 +554,7 @@ def groupme_acknowledge():
     return "Unknown wbor_message_id", 404
 
 
-def has_media(sms_data):
+def has_media(sms_data: dict) -> bool:
     """
     Check for the presence of media in an SMS message.
 
@@ -561,7 +568,7 @@ def has_media(sms_data):
     return num_media > 0
 
 
-def has_unsupported_media(sms_data):
+def has_unsupported_media(sms_data: dict) -> bool:
     """
     Check the media URLs in an SMS message for unsupported types.
 
@@ -648,7 +655,7 @@ def get_automation_status() -> bool:
 
 @app.route("/sms", methods=["POST"])
 @validate_twilio_request
-def receive_sms():
+def receive_sms() -> str:
     """
     Handler for incoming SMS messages from Twilio. Publishes messages to
     RabbitMQ.
@@ -753,7 +760,7 @@ def receive_sms():
 
 
 @app.route("/send", methods=["GET"])
-def browser_queue_outgoing_sms():
+def browser_queue_outgoing_sms() -> str:
     """
     Send an SMS message using the Twilio API from a browser address bar.
     Requires a password.
@@ -820,7 +827,7 @@ def browser_queue_outgoing_sms():
 
 
 @app.route("/ban", methods=["GET"])
-def browser_ban_contact():
+def browser_ban_contact() -> str:
     """
     Ban a phone number from all future communication.
 
@@ -872,7 +879,7 @@ def browser_ban_contact():
 
 
 @app.route("/unban", methods=["GET"])
-def browser_unban_contact():
+def browser_unban_contact() -> str:
     """
     Remove a phone number from the ban list.
 
@@ -924,7 +931,7 @@ def browser_unban_contact():
 
 
 @app.route("/voice-intelligence", methods=["POST"])
-def log_webhook():
+def log_webhook() -> str:
     """
     Endpoint for receiving Voice Intelligence webhook events.
 
@@ -941,7 +948,7 @@ def log_webhook():
 
 
 @app.route("/call-events", methods=["POST"])
-def log_call_event():
+def log_call_event() -> str:
     """
     Endpoint for receiving Call Event webhook events.
 
@@ -955,7 +962,7 @@ def log_call_event():
 
 
 @app.route("/")
-def is_online():
+def is_online() -> str:
     """
     Health check endpoint.
     """
