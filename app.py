@@ -685,24 +685,24 @@ def receive_sms() -> str:
                     "Thank you for your message! Unfortunately, it contains "
                     "one or more unsupported media types. "
                     "As a result, it may not be delivered as expected. "
-                    "- WBOR (Note: DJs cannot reply to texts.)"
+                    "- WBOR \n\n(Note: DJs cannot reply to texts.)"
                 )
                 resp.message(response_message)
             else:
                 response_message = (
                     "Thank you for your message! Unfortunately, we don't support "
                     "media at this time, so the DJ won't see any photos or videos"
-                    " sent. - WBOR (Note: DJs cannot reply to texts.)"
+                    " sent. - WBOR \n\n(Note: DJs cannot reply to texts.)"
                 )
                 resp.message(response_message)
         else:
-            response_message = (
-                "Thank you for your message! - WBOR (Note: DJs cannot reply to texts.)"
-            )
+            response_message = "Thank you for your message! - WBOR \n\n(Note: DJs cannot reply to texts.)"
             resp.message(response_message)
     else:
         response_message = (
-            "There are currently no DJs in the studio to receive your text :( "
+            "There is not a playlist currently active so there might "
+            "not currently be any DJs in the studio to receive your "
+            "text :( \n\n"
             "Try again later or view our schedule at wbor.org/schedule"
         )
         resp.message(response_message)
