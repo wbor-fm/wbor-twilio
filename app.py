@@ -331,7 +331,10 @@ def fetch_name(sms_data: dict) -> str:
 
 
 def process_outgoing_sms_message(
-    channel: pika.channel.Channel, method: pika.spec.Basic.Deliver, body: bytes
+    channel: pika.channel.Channel,
+    method: pika.spec.Basic.Deliver,
+    _properties: pika.spec.BasicProperties,
+    body: bytes,
 ) -> None:
     """
     Processes an outgoing SMS message from RabbitMQ.
