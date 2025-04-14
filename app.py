@@ -381,7 +381,7 @@ def process_outgoing_sms_message(
             logger.error(
                 "Failed to send SMS for UID: `%s`", message.get("wbor_message_id")
             )
-            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     except (json.JSONDecodeError, KeyError, ValueError) as specific_error:
         logger.exception(
             "Unhandled exception while processing message: `%s`", specific_error
