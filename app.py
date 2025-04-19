@@ -703,9 +703,9 @@ def receive_sms() -> str:
             resp.message(response_message)
     else:
         response_message = (
-            "There is not a playlist currently active so there might "
-            "not currently be any DJs in the studio to receive your "
-            "text :( \n\n"
+            "According to our records, we don't see a live DJ playlist active, "
+            "so there might not currently be any DJs in the studio to receive "
+            "your text :( \n\n"
             "Try again later or view our schedule at wbor.org/schedule"
         )
         resp.message(response_message)
