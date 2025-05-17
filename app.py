@@ -631,6 +631,8 @@ def get_automation_status() -> bool:
     """
     Check the status of the automation system.
 
+    If the api isn't reachable, assume automation is disabled.
+
     Returns:
     - bool: True if automation is enabled, False otherwise.
     """
@@ -699,7 +701,10 @@ def receive_sms() -> str:
                 )
                 resp.message(response_message)
         else:
-            response_message = "Thank you for your message! - WBOR \n\n(Note: DJs cannot reply to texts.)"
+            response_message = (
+                "Thank you for your message! - WBOR \n\n(Note: DJs cannot reply to "
+                "texts.)"
+            )
             resp.message(response_message)
     else:
         response_message = (
