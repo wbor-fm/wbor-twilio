@@ -26,6 +26,7 @@ run: stop
 		--log-driver json-file \
 		--log-opt max-size=30m \
 		--log-opt max-file=30 \
+		--restart unless-stopped \
 		-v ${HOST_DIR}/logs:/app/logs \
 		$(IMAGE_NAME)
 
