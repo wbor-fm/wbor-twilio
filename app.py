@@ -166,6 +166,9 @@ def publish_to_exchange(key: str, sub_key: str, data: dict) -> None:
             host=RABBITMQ_HOST,
             credentials=credentials,
             client_properties={"connection_name": "TwilioConnection"},
+            # Set heartbeat to 300 seconds (5 minutes) to keep connection alive
+            heartbeat=300,
+            blocked_connection_timeout=300,
         )
         connection = pika.BlockingConnection(parameters)
         channel = connection.channel()
@@ -459,6 +462,9 @@ def start_outgoing_message_consumer() -> None:
                     client_properties={
                         "connection_name": "OutgoingSMSConsumerConnection"
                     },
+                    # Set heartbeat to 300 seconds (5 minutes) to keep connection alive
+                    heartbeat=300,
+                    blocked_connection_timeout=300,
                 )
                 connection = pika.BlockingConnection(parameters)
                 channel = connection.channel()
